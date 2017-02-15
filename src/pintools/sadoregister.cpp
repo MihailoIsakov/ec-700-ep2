@@ -70,16 +70,16 @@ VOID Instruction(INS ins, VOID *v)
         OutFile.setf(ios::showbase);//open file
 
         OutFile2.setf(ios::app | ios::out);//open file
-        OutFile2.open("outputfiles/op_disass_taint.out");	
+        OutFile2.open("logs/op_disass_taint.out");	
 
         OutFile3.setf(ios::app | ios::out);//open file
-        OutFile3.open("outputfiles/flags_taint.out");
+        OutFile3.open("logs/flags_taint.out");
 
         OutFile4.setf(ios::app | ios::out);//open file
-        OutFile4.open("outputfiles/gp_regval_taint.out");	
+        OutFile4.open("logs/gp_regval_taint.out");	
 
         OutFile5.setf(ios::app | ios::out);//open file
-        OutFile5.open("outputfiles/regdetails.out");
+        OutFile5.open("logs/regdetails.out");
         flag=false;
     }
 
