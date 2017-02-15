@@ -1,4 +1,5 @@
 In order to make this, you have to:
+* go to src with `cd src`
 * set the PIN_ROOT to the Config folder, so type in a terminal:
 `export PIN_ROOT=/path/to/pin_directory`
 * make the file `code.cpp` with:
