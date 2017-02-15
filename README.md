@@ -6,3 +6,6 @@ In order to make this, you have to:
 `make obj-intel64 code.so`  
 Don't ask me why we just provide `code.so`, instead of `code.cpp`, I don't wanna look into the makefiles.
 
+To run pin on some command, do:
+`./runpin pintools/obj-intel64/some_pintool.se some_command`
+
