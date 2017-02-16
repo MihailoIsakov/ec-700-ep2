@@ -9,8 +9,8 @@ ofstream RegValuesFile;
 ofstream RegNamesFile; 
 int instr_count = 0;
 
-VOID printReg(REG reg, ADDRINT value, INS ins) { 
-    RegValuesFile << instr_count++ << ": " << REG_StringShort(reg) << " = " << value << "; " << INS_Disassemble(ins) << endl;
+VOID printReg(UINT64 addr, REG reg, ADDRINT value, INS ins) { 
+    RegValuesFile << addr << ": " << REG_StringShort(reg) << " = " << value << "; " << INS_Disassemble(ins) << endl;
 }
 
 
@@ -36,8 +36,9 @@ VOID Instruction(INS ins, VOID *v)
         if (writeRegName.substr(1, 2) != "mm")
             INS_InsertCall(ins, IPOINT_BEFORE, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
                 (AFUNPTR)printReg,
-                IARG_UINT32, REG(INS_OperandReg(ins, i)),
-                IARG_REG_VALUE, INS_RegW(ins, 0),
+                IARG_INST_PTR,
+                IARG_UINT32, writeReg,
+                IARG_REG_VALUE, writeReg,
                 IARG_UINT32, ins,
                 IARG_END);
 
