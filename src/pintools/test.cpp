@@ -3,14 +3,28 @@
 #include "pin.H"
 #include <bitset>
 #include <string>
+#include <iomanip>
 
 bool flag = true;
 ofstream RegValuesFile; 
 ofstream RegNamesFile; 
 int instr_count = 0;
 
+int get_bit(int value, int n) {
+    // returns nonzero value if the nth bit is set
+    // input n is zero-indexed
+    return (int) (value & (1 << n));
+}
+
 VOID printReg(UINT64 addr, REG reg, ADDRINT value, INS ins) { 
-    RegValuesFile << addr << ": " << REG_StringShort(reg) << " = " << value << "; " << INS_Disassemble(ins) << endl;
+    RegValuesFile << std::left << std::setw(16) << addr 
+                  << ": " << std::setw(32) << INS_Disassemble(ins) << "; " 
+                  << std::setw(6) << REG_StringShort(reg) << " = " << std::setw(20) << value;
+
+    if (REG_StringShort(reg).compare("rflags") == 0 && get_bit(value, 11))
+        RegValuesFile << " OVERFLOW!" << endl;
+    else
+        RegValuesFile << endl;
 }
 
 
@@ -29,9 +43,6 @@ VOID Instruction(INS ins, VOID *v)
     for(UINT32 i=0; i<max_w; i++){
         REG writeReg = INS_RegW(ins, i);
         string writeRegName = REG_StringShort(writeReg);
-        //RegValuesFile << writeRegName << endl;
-        //ADDRINT addr = INS_Address(ins);
-        
         
         if (writeRegName.substr(1, 2) != "mm")
             INS_InsertCall(ins, IPOINT_BEFORE, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
@@ -41,7 +52,6 @@ VOID Instruction(INS ins, VOID *v)
                 IARG_REG_VALUE, writeReg,
                 IARG_UINT32, ins,
                 IARG_END);
-
     }
 }
 
