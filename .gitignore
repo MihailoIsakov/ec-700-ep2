@@ -1,5 +1,6 @@
 # Custom
 *.log
+*.s
 
 # Prerequisites
 *.d
