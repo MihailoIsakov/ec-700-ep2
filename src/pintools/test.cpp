@@ -41,9 +41,16 @@ bool taint2_policy(INS ins, bool reg1_taint, bool reg2_taint) {
 // taint2 is inserted before operations with two arguments
 //
 VOID taint(INS ins, REG flags, int *taint_array) { 
-    //bool taint = get_bit(flags, 11);
+    bool taint = false;
+    const UINT32 max_w = INS_MaxNumWRegs(ins);
 
-    RegValuesFile << flags << endl;
+    for (UINT32 i=0; i<max_w; i++) {
+        REG writeReg = INS_RegW(ins, i); 
+        if (writeReg == FLAGS_REG_INDEX) // if flags is being written to
+            taint = get_bit(flags, 11);
+    }
+
+    RegValuesFile << taint << endl;
 
     //if (taint)
         //taint_array[reg] = taint;
@@ -86,13 +93,6 @@ VOID Instruction(INS ins, VOID *v)
         string writeRegName = REG_StringShort(writeReg);
         
         if (writeRegName.substr(1, 2) != "mm")
-            //INS_InsertCall(ins, IPOINT_BEFORE, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
-                //(AFUNPTR)printReg,
-                //IARG_INST_PTR,
-                //IARG_UINT32, writeReg,
-                //IARG_REG_VALUE, writeReg,
-                //IARG_UINT32, ins,
-                //IARG_END);
             INS_InsertCall(ins, IPOINT_BEFORE, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
                 (AFUNPTR) taint,
                 IARG_UINT32, ins,
