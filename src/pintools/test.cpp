@@ -5,6 +5,9 @@
 #include <string>
 #include <iomanip>
 
+#define TAINT_ARRAY_SIZE 100
+#define FLAGS_REG_INDEX  25
+
 bool flag = true;
 ofstream RegValuesFile; 
 ofstream RegNamesFile; 
@@ -27,15 +30,53 @@ VOID printReg(UINT64 addr, REG reg, ADDRINT value, INS ins) {
         RegValuesFile << endl;
 }
 
+bool taint1_policy(INS ins, bool reg1_taint) {
+    return reg1_taint;
+}
+
+bool taint2_policy(INS ins, bool reg1_taint, bool reg2_taint) {
+    return reg1_taint || reg2_taint;
+}
+
+// taint2 is inserted before operations with two arguments
+//
+VOID taint(INS ins, REG flags, int *taint_array) { 
+    //bool taint = get_bit(flags, 11);
+
+    RegValuesFile << flags << endl;
+
+    //if (taint)
+        //taint_array[reg] = taint;
+    //else {
+        //const UINT32 max_r = INS_MaxNumRRegs(ins); 
+        //const UINT32 max_w = INS_MaxNumWRegs(ins);
+    
+        //if (max_r == 2) {
+            //REG read1 = INS_RegR(ins, 0);
+            //REG read2 = INS_RegR(ins, 1);
+            //REG write = INS_RegW(ins, 0);
+
+            //taint = taint2_policy(taint_array[read1], taint_array[read2]);
+            //taint_array[write] = taint;
+        //}
+    //}
+}
+
 
 VOID Instruction(INS ins, VOID *v)
 {
+    //const UINT32 max_r=INS_MaxNumRRegs(ins);//number of readed registers in the instruction
     const UINT32 max_w=INS_MaxNumWRegs(ins);//number of written registers in the instruction
+
+    bool taint_array[TAINT_ARRAY_SIZE];
 
     if(flag){    // initialize taint array for just once
 
         RegValuesFile.open("logs/values.out");
         RegNamesFile.open("logs/names.out");
+
+        for (int i=0; i<TAINT_ARRAY_SIZE; i++)
+            taint_array[i] = i%2;
 
         flag=false;
     }
@@ -45,12 +86,18 @@ VOID Instruction(INS ins, VOID *v)
         string writeRegName = REG_StringShort(writeReg);
         
         if (writeRegName.substr(1, 2) != "mm")
+            //INS_InsertCall(ins, IPOINT_BEFORE, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
+                //(AFUNPTR)printReg,
+                //IARG_INST_PTR,
+                //IARG_UINT32, writeReg,
+                //IARG_REG_VALUE, writeReg,
+                //IARG_UINT32, ins,
+                //IARG_END);
             INS_InsertCall(ins, IPOINT_BEFORE, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
-                (AFUNPTR)printReg,
-                IARG_INST_PTR,
-                IARG_UINT32, writeReg,
-                IARG_REG_VALUE, writeReg,
+                (AFUNPTR) taint,
                 IARG_UINT32, ins,
+                IARG_REG_VALUE, FLAGS_REG_INDEX,
+                IARG_PTR, taint_array,
                 IARG_END);
     }
 }
