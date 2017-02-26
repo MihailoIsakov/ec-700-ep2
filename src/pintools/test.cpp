@@ -13,6 +13,8 @@ ofstream RegValuesFile;
 ofstream RegNamesFile; 
 int instr_count = 0;
 
+bool taint_array[TAINT_ARRAY_SIZE];
+
 int get_bit(int value, int n) {
     // returns nonzero value if the nth bit is set
     // input n is zero-indexed
@@ -34,49 +36,74 @@ bool taint1_policy(INS ins, bool reg1_taint) {
     return reg1_taint;
 }
 
+// The taint propagation policy for instructions with two register operands
 bool taint2_policy(INS ins, bool reg1_taint, bool reg2_taint) {
     return reg1_taint || reg2_taint;
 }
 
-// taint2 is inserted before operations with two arguments
-//
-VOID taint(INS ins, REG flags, int *taint_array) { 
-    bool taint = false;
-    const UINT32 max_w = INS_MaxNumWRegs(ins);
+// checks if the instruction producting the overflow should be regarded,
+// as some instructions commonly produce OF that is useless (MOV, JZ)
+// We are interested in arithmetic operations, 
+// excluding CMP which performs subtractions causing OFs
+bool can_overflow(INS ins) {
+    bool can = true;
+    if (CATEGORY_StringShort(INS_Category(ins)) != "BINARY")
+        can = false;
+    if (INS_Mnemonic(ins) == "CMP")
+        can = false;
+    return can;
+}
 
-    for (UINT32 i=0; i<max_w; i++) {
-        REG writeReg = INS_RegW(ins, i); 
-        // if flags is being written to, check for overflow and set taint
-        if (writeReg == FLAGS_REG_INDEX) 
-            //taint = get_bit(flags, 11);
-            taint = 0;
+VOID taint(INS ins, REG flags) { 
+    //const UINT32 max_w = INS_MaxNumWRegs(ins);
+
+    bool taint = false;
+    if (can_overflow(ins))
+        taint = get_bit(flags, 11);
+
+    if (taint) {
+        cout << INS_RegW(ins, 0) << endl;
+        taint_array[INS_RegW(ins, 0)] = taint;
+    }
+    else {
+        // depending on the number of operands, use different propagation function
+        const UINT32 max_r = INS_MaxNumRRegs(ins); 
+    
+        switch(max_r) {
+            case 1: {
+                REG read = INS_RegR(ins, 0);
+                taint = taint1_policy(ins, taint_array[read]);
+            }
+            case 2: {
+                REG read1 = INS_RegR(ins, 0);
+                REG read2 = INS_RegR(ins, 1);
+                taint = taint2_policy(ins, taint_array[read1], taint_array[read2]);
+            }
+        }
+        
+        REG write = INS_RegW(ins, 0);
+        taint_array[write] = taint;
     }
 
-    taint_array[INS_RegW(ins, 0)] = taint;
-    //if (taint)
-        //taint_array[INS_RegW(ins, 0)] = taint;
-    //else {
-        //const UINT32 max_r = INS_MaxNumRRegs(ins); 
-    
-        //switch(max_r) {
-            //case 1: {
-                //REG read = INS_RegR(ins, 0);
-                //taint = taint1_policy(taint_array[read]);
-            //}
-            //case 2: {
-                //UINT32 read1 = INS_RegR(ins, 0);
-                //UINT32 read2 = INS_RegR(ins, 1);
-                //taint = taint2_policy(taint_array[read1], taint_array[read2]);
-            //}
-        //}
-        
-        //REG write = INS_RegW(ins, 0);
-        //taint_array[write] = taint;
-    //}
-
-    RegValuesFile << std::left << std::setw(32) << INS_Disassemble(ins) << "; ";
-    for (int i=0; i<TAINT_ARRAY_SIZE; i++)
-        RegValuesFile << taint_array[i] << " ";
+    RegValuesFile << std::left << std::setw(36) << INS_Disassemble(ins) << "; ";
+    if (taint)
+        RegValuesFile << "OF ";
+    else
+        RegValuesFile << "   ";
+    //for (int i=0; i<TAINT_ARRAY_SIZE; i++)
+        //RegValuesFile << taint_array[i];
+    int f = flags;
+    for (int i=0; i<64; i++) {
+        if (f & 1)
+            RegValuesFile << "1";
+        else
+            RegValuesFile << "0";
+        f >>= 1;
+    }
+    RegValuesFile << "\t";
+    for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
+        RegValuesFile << (taint_array[i] != 0);
+    }
     RegValuesFile << endl;
 }
 
@@ -86,29 +113,23 @@ VOID Instruction(INS ins, VOID *v)
     //const UINT32 max_r=INS_MaxNumRRegs(ins);//number of readed registers in the instruction
     //const UINT32 max_w=INS_MaxNumWRegs(ins);//number of written registers in the instruction
 
-    int taint_array[TAINT_ARRAY_SIZE];
 
     if(flag){    // initialize taint array for just once
 
         RegValuesFile.open("logs/values.out");
         RegNamesFile.open("logs/names.out");
 
+        flag=false;
+
         for (int i=0; i<TAINT_ARRAY_SIZE; i++)
             taint_array[i] = 0;
-
-        flag=false;
     }
-
-    REG writeReg = INS_RegW(ins, 0);
-    string writeRegName = REG_StringShort(writeReg);
     
-    if (writeRegName.substr(1, 2) != "mm")
-        INS_InsertCall(ins, IPOINT_BEFORE, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
-            (AFUNPTR) taint,
-            IARG_UINT32, ins,
-            IARG_REG_VALUE, FLAGS_REG_INDEX,
-            IARG_PTR, taint_array,
-            IARG_END);
+    INS_InsertCall(ins, IPOINT_BEFORE, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
+        (AFUNPTR) taint,
+        IARG_UINT32, ins,
+        IARG_REG_VALUE, FLAGS_REG_INDEX,
+        IARG_END);
 }
 
 // This function is called when the application exits
