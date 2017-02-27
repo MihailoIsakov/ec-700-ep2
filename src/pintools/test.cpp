@@ -6,15 +6,18 @@
 #include <iomanip>
 #include <map>
 
-#define TAINT_ARRAY_SIZE 100
+#define TAINT_ARRAY_SIZE 150
 #define FLAGS_REG_INDEX  25
 bool flag = true;
 ofstream RegValuesFile; 
 int instr_count = 0;
 
-bool taint_array[TAINT_ARRAY_SIZE];
+char taint_array[TAINT_ARRAY_SIZE];
 std::map<ADDRINT, std::string> disAssemblyMap;
 std::map<ADDRINT, std::string> categoryMap;
+std::map<ADDRINT, std::string> mnemonicMap;
+std::map<ADDRINT, REG>         writeRegMap;
+std::map<REG, std::string>     regNameMap;
 
 
 int get_bit(int value, int n) {
@@ -36,65 +39,15 @@ bool taint2_policy(INS ins, bool reg1_taint, bool reg2_taint) {
 // as some instructions commonly produce OF that is useless (MOV, JZ)
 // We are interested in arithmetic operations, 
 // excluding CMP which performs subtractions causing OFs
-bool can_overflow(INS ins) {
-    if (CATEGORY_StringShort(INS_Category(ins)) != "BINARY")
+bool can_overflow(ADDRINT ip) {
+    if (categoryMap[ip] != "BINARY")
         return false;
-    if (INS_Mnemonic(ins) == "CMP")
+    if (mnemonicMap[ip] == "CMP")
         return false;
     return true;
 }
 
-// TODO add check if flags is being written to in this instruction
-VOID taint(ADDRINT ip, INS ins, REG flags) { 
-
-    bool taint = false;
-    if (can_overflow(ins))
-        taint = get_bit(flags, 11);
-
-    //if (taint) {
-        //REG write_to = INS_RegW(ins, 0);
-        //write_to = REG_FullRegName(write_to); // (EAX, AX, AH, AL) -> RAX
-
-        //if (REG_is_gr(write_to))
-            //taint_array[write_to] = taint;
-    //}
-    //else {
-        //// depending on the number of operands, use different propagation function
-        //const UINT32 max_r = INS_MaxNumRRegs(ins); 
-    
-        //switch(max_r) {
-            //case 1: {
-                //REG read = INS_RegR(ins, 0);
-                //taint = taint1_policy(ins, taint_array[read]);
-                //if(taint)
-                    //cout << "1: "<< INS_Disassemble(ins) << endl;
-                //break;
-            //}
-            //case 2: {
-                //REG read1 = INS_RegR(ins, 0);
-                //REG read2 = INS_RegR(ins, 1);
-                //taint = taint2_policy(ins, taint_array[read1], taint_array[read2]);
-                //if(taint)
-                    //cout << "2: "<< INS_Disassemble(ins) << endl;
-                //break;
-            //}
-            //default: {
-                //break;
-            //}
-        //}
-        
-        //REG write = INS_RegW(ins, 0);
-        //taint_array[write] = taint;
-    //}
-    
-
-    RegValuesFile << std::left << ip << " " << std::setw(10) << std::hex << categoryMap[ip] << " " << std::setw(36) << disAssemblyMap[ip] << "; ";
-    if (taint)
-        RegValuesFile << "OF ";
-    else
-        RegValuesFile << "   ";
-    //for (int i=0; i<TAINT_ARRAY_SIZE; i++)
-        //RegValuesFile << taint_array[i];
+void print_flags(REG flags) {
     int f = flags;
     for (int i=0; i<64; i++) {
         if (f & 1)
@@ -103,10 +56,87 @@ VOID taint(ADDRINT ip, INS ins, REG flags) {
             RegValuesFile << "0";
         f >>= 1;
     }
+}
+
+void print_taint_array() {
+    //for (int i=0; i<TAINT_ARRAY_SIZE; i++)
+        //RegValuesFile << taint_array[i];
     //RegValuesFile << "\t";
-    //for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
-        //RegValuesFile << (taint_array[i] != 0);
-    //}
+    char c;
+    for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
+        switch (taint_array[i]) {
+            case 0: c = '.';
+                    break;
+            case 1: c = 'T';
+                    break;
+            case 2: c = 'P';
+                    break;
+        }
+        RegValuesFile << c;
+    }
+}
+
+void print_ins(ADDRINT ip, REG flags){
+    RegValuesFile << std::left << std::setw(15) << std::hex << ip << " " << std::setw(10) << categoryMap[ip] << " " << std::setw(40) << disAssemblyMap[ip] << "; ";
+    //RegValuesFile << (taint ? "OF " : "   ");
+
+    //print_flags(flags);
+}
+
+VOID taint(ADDRINT ip, INS ins, REG flags) { 
+    print_ins(ip, flags);
+
+    // in case nothing is written to a register, return
+    if (writeRegMap.count(ip) == 0) {
+        print_taint_array();
+        RegValuesFile << endl;
+        return;
+    }
+
+    // write to this
+    REG write_reg = writeRegMap[ip];
+
+    // if an overflow occured, taint the array at write_reg and return
+    bool taint = false;
+    if (can_overflow(ip))
+        taint = get_bit(flags, 11);
+    if (taint) {
+        taint_array[write_reg] = 1;
+        cout << "Taint: " << std::hex << ip << endl;
+        print_taint_array();
+        RegValuesFile << endl;
+        return;
+    }
+
+    // in case the taint didn't happen, either due to the op not being able to cause the overflow, 
+    // or if the overflow did not happen, check if any of the operands were tainted and taint the result
+    const UINT32 max_r = INS_MaxNumRRegs(ins); 
+    switch(max_r) {
+        case 0: {
+            taint = false;
+            break;
+        }
+        case 1: {
+            REG read = INS_RegR(ins, 0);
+            taint = taint1_policy(ins, taint_array[read]);
+            break;
+        }
+        case 2: {
+            REG read1 = INS_RegR(ins, 0);
+            REG read2 = INS_RegR(ins, 1);
+            taint = taint2_policy(ins, taint_array[read1], taint_array[read2]);
+            break;
+        }
+        default: {
+            taint = false;
+            //cout << max_r << endl;
+            break;
+        }
+    }
+
+    taint_array[write_reg] = taint ? 2 : 0;
+
+    print_taint_array();
     RegValuesFile << endl;
 }
 
@@ -123,9 +153,16 @@ VOID Instruction(INS ins, VOID *v)
             taint_array[i] = 0;
     }
 
-    disAssemblyMap[INS_Address(ins)] = INS_Disassemble(ins);
-    categoryMap[INS_Address(ins)] = CATEGORY_StringShort(INS_Category(ins));
-    
+    ADDRINT addr = INS_Address(ins);
+    disAssemblyMap[addr] = INS_Disassemble(ins);
+    categoryMap[addr]    = CATEGORY_StringShort(INS_Category(ins));
+    mnemonicMap[addr]    = INS_Mnemonic(ins);
+    // get the write register, get the original from it, and check if it is general purpose
+    REG write_to = INS_RegW(ins, 0);
+    write_to = REG_FullRegName(write_to); // (EAX, AX, AH, AL) -> RAX
+    if (REG_is_gr(write_to))
+        writeRegMap[addr] = write_to;
+
     INS_InsertCall(ins, IPOINT_BEFORE, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
         (AFUNPTR) taint,
         IARG_INST_PTR,
