@@ -8,7 +8,7 @@
 #include <map>
 #include <list>
 
-#define TAINT_ARRAY_SIZE 50
+#define TAINT_ARRAY_SIZE 24
 #define FLAGS_REG_INDEX  25
 
 
@@ -75,7 +75,6 @@ void print_taint_array(bool taint) {
                     break;
         }
     }
-    RegValuesFile << endl;
 }
 
 void print_ins(ADDRINT ip, REG flags){
@@ -86,18 +85,17 @@ void print_ins(ADDRINT ip, REG flags){
 }
 
 void print_tainted_addresses() {
-    RegValuesFile << endl;
-    RegValuesFile << "Tainted addr " << TMS.size() << ": ";
+    RegValuesFile << "Tainted addr: " ;
     for(std::set<ADDRINT>::iterator it = TMS.begin(); it != TMS.end(); ++it)
         RegValuesFile << *it << ", ";
-    RegValuesFile << endl;
 }
 
 void print_all(ADDRINT ip, REG flags) {
     print_ins(ip, flags);
     print_taint_array(did_taint);
     did_taint = false;
-    print_tainted_addresses();
+    //print_tainted_addresses();
+    RegValuesFile << endl;
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -141,7 +139,7 @@ VOID pushRWAnalysis(ADDRINT sp) {
         cout << "pushRW SAVING: " << readAddr << endl;
         TMS.insert(writeAddr);
     }
-    else {// otherwise remove it if present
+    else { // otherwise remove it if present
         cout << "pushRW ERASING: " << readAddr << endl;
         TMS.erase(writeAddr);
     }       
@@ -205,7 +203,6 @@ VOID taintAnalysis(ADDRINT ip, INS ins, REG flags) {
     if (taint) {
         taint_array[write_reg] = 1;
         did_taint = true;
-        //print_all(ip, flags);
         return;
     }
 
@@ -232,7 +229,6 @@ VOID taintAnalysis(ADDRINT ip, INS ins, REG flags) {
 
     taint_array[write_reg] = taint ? 2 : 0;
 
-    //print_all(ip, flags);
 }
 
 // POP analysis
@@ -247,6 +243,11 @@ VOID popAnalysis(ADDRINT ip, ADDRINT sp) {
 
 
 VOID printState(ADDRINT ip, REG flags) {
+    // cleanup code after everything
+    // removes the 0th taint array element, which is the invalid register
+    taint_array[0] = 0;
+
+    // and print
     print_all(ip, flags);
 }
 
@@ -278,7 +279,7 @@ VOID Instruction(INS ins, VOID *v){
 
     if(flag){    // open files
         // Mihailo's instrumentation setup
-        RegValuesFile.open("logs/values.out");
+        RegValuesFile.open("/disk/logs/values.out");
         for (int i=0; i<TAINT_ARRAY_SIZE; i++)
             taint_array[i] = 0;
 
