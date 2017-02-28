@@ -5,19 +5,21 @@
 #include <string>
 #include <iomanip>
 #include <map>
+#include <list>
 
-#define TAINT_ARRAY_SIZE 150
+#define TAINT_ARRAY_SIZE 50
 #define FLAGS_REG_INDEX  25
 bool flag = true;
 ofstream RegValuesFile; 
 int instr_count = 0;
 
 char taint_array[TAINT_ARRAY_SIZE];
-std::map<ADDRINT, std::string> disAssemblyMap;
-std::map<ADDRINT, std::string> categoryMap;
-std::map<ADDRINT, std::string> mnemonicMap;
-std::map<ADDRINT, REG>         writeRegMap;
-std::map<REG, std::string>     regNameMap;
+std::map<ADDRINT, std::string>      disAssemblyMap;
+std::map<ADDRINT, std::string>      categoryMap;
+std::map<ADDRINT, std::string>      mnemonicMap;
+std::map<ADDRINT, REG>              writeRegMap;
+std::map<REG, std::string>          regNameMap;
+std::map<ADDRINT, std::list<REG> > readRegMap;
 
 
 int get_bit(int value, int n) {
@@ -65,14 +67,14 @@ void print_taint_array() {
     char c;
     for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
         switch (taint_array[i]) {
-            case 0: c = '.';
+            case 0: RegValuesFile << " . ";
                     break;
-            case 1: c = 'T';
+            case 1: RegValuesFile << regNameMap[(REG)i];
                     break;
-            case 2: c = 'P';
+            case 2: RegValuesFile << regNameMap[(REG)i];
                     break;
         }
-        RegValuesFile << c;
+        
     }
 }
 
@@ -102,7 +104,6 @@ VOID taint(ADDRINT ip, INS ins, REG flags) {
         taint = get_bit(flags, 11);
     if (taint) {
         taint_array[write_reg] = 1;
-        cout << "Taint: " << std::hex << ip << endl;
         print_taint_array();
         RegValuesFile << endl;
         return;
@@ -111,28 +112,24 @@ VOID taint(ADDRINT ip, INS ins, REG flags) {
     // in case the taint didn't happen, either due to the op not being able to cause the overflow, 
     // or if the overflow did not happen, check if any of the operands were tainted and taint the result
     const UINT32 max_r = INS_MaxNumRRegs(ins); 
-    switch(max_r) {
-        case 0: {
-            taint = false;
-            break;
-        }
-        case 1: {
-            REG read = INS_RegR(ins, 0);
-            taint = taint1_policy(ins, taint_array[read]);
-            break;
-        }
-        case 2: {
-            REG read1 = INS_RegR(ins, 0);
-            REG read2 = INS_RegR(ins, 1);
-            taint = taint2_policy(ins, taint_array[read1], taint_array[read2]);
-            break;
-        }
-        default: {
-            taint = false;
-            //cout << max_r << endl;
-            break;
-        }
+    taint = false;
+
+    //cout << disAssemblyMap[ip] << "  " << max_r << endl;
+    cout << ip << "  size: " << readRegMap[ip].size() << endl;
+    std::list<REG>::iterator it;
+    for(it = readRegMap[ip].begin(); it != readRegMap[ip].end(); ++it) {
+        REG read = *it;
+        if (taint_array[read] != 0)
+            taint = true;
     }
+
+    //for (int i=0; i<max_r; i++) {
+        //REG read = INS_RegR(ins, i);
+        ////cout << REG_StringShort(read) << endl;
+        //if (REG_is_gr(read)) // just the general purpose registers
+            //if (taint_array[read] != 0) // if tainted
+                //taint = true;
+    //}
 
     taint_array[write_reg] = taint ? 2 : 0;
 
@@ -160,15 +157,31 @@ VOID Instruction(INS ins, VOID *v)
     // get the write register, get the original from it, and check if it is general purpose
     REG write_to = INS_RegW(ins, 0);
     write_to = REG_FullRegName(write_to); // (EAX, AX, AH, AL) -> RAX
+    regNameMap[write_to] = REG_StringShort(write_to);
     if (REG_is_gr(write_to))
         writeRegMap[addr] = write_to;
 
-    INS_InsertCall(ins, IPOINT_BEFORE, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
-        (AFUNPTR) taint,
-        IARG_INST_PTR,
-        IARG_UINT32, ins,
-        IARG_REG_VALUE, FLAGS_REG_INDEX,
-        IARG_END);
+    // filling read registers
+    std::list<REG> readList;
+    std::list<REG>::iterator it;
+    it = readList.begin();
+
+    //cout <<"IP: " << addr   << endl;
+    const UINT32 max_r = INS_MaxNumRRegs(ins); 
+    for (unsigned int i=0; i<max_r; i++) {
+        REG read = INS_RegR(ins, i);
+        if (REG_is_gr(REG_FullRegName(read))) // just the general purpose registers
+            readRegMap[addr].insert(it, REG_FullRegName(read));
+    }
+    readRegMap[addr] = readList;
+
+    if (INS_HasFallThrough(ins)) // FIXME
+        INS_InsertCall(ins, IPOINT_AFTER, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
+            (AFUNPTR) taint,
+            IARG_INST_PTR,
+            IARG_UINT32, ins,
+            IARG_REG_VALUE, FLAGS_REG_INDEX,
+            IARG_END);
 }
 
 // This function is called when the application exits
