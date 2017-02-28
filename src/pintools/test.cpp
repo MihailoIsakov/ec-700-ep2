@@ -11,7 +11,6 @@
 #define FLAGS_REG_INDEX  25
 bool flag = true;
 ofstream RegValuesFile; 
-int instr_count = 0;
 
 char taint_array[TAINT_ARRAY_SIZE];
 std::map<ADDRINT, std::string>      disAssemblyMap;
@@ -19,22 +18,13 @@ std::map<ADDRINT, std::string>      categoryMap;
 std::map<ADDRINT, std::string>      mnemonicMap;
 std::map<ADDRINT, REG>              writeRegMap;
 std::map<REG, std::string>          regNameMap;
-std::map<ADDRINT, std::list<REG> > readRegMap;
+std::map<ADDRINT, std::list<REG> >  readRegMap;
 
 
 int get_bit(int value, int n) {
     // returns nonzero value if the nth bit is set
     // input n is zero-indexed
     return (int) (value & (1 << n)) != 0;
-}
-
-bool taint1_policy(INS ins, bool reg1_taint) {
-    return reg1_taint;
-}
-
-// The taint propagation policy for instructions with two register operands
-bool taint2_policy(INS ins, bool reg1_taint, bool reg2_taint) {
-    return reg1_taint || reg2_taint;
 }
 
 // checks if the instruction producting the overflow should be regarded,
@@ -105,8 +95,6 @@ VOID taint(ADDRINT ip, INS ins, REG flags) {
         print_taint_array(true);
         return;
     }
-    
-
 
     // in case the taint didn't happen, either due to the op not being able to cause the overflow, 
     // or if the overflow did not happen, check if any of the operands were tainted and taint the result
@@ -127,8 +115,6 @@ VOID taint(ADDRINT ip, INS ins, REG flags) {
 
 VOID Instruction(INS ins, VOID *v)
 {
-    //const UINT32 max_r=INS_MaxNumRRegs(ins);//number of readed registers in the instruction
-    //const UINT32 max_w=INS_MaxNumWRegs(ins);//number of written registers in the instruction
 
     if(flag){    // initialize taint array for just once
         flag = false;
@@ -141,6 +127,7 @@ VOID Instruction(INS ins, VOID *v)
     disAssemblyMap[addr] = INS_Disassemble(ins);
     categoryMap[addr]    = CATEGORY_StringShort(INS_Category(ins));
     mnemonicMap[addr]    = INS_Mnemonic(ins);
+    
     // get the write register, get the original from it, and check if it is general purpose
     REG write_to = INS_RegW(ins, 0);
     write_to = REG_FullRegName(write_to); // (EAX, AX, AH, AL) -> RAX
@@ -153,12 +140,14 @@ VOID Instruction(INS ins, VOID *v)
     std::list<REG>::iterator it;
     it = readList.begin();
 
+    // FIXME disregard base and index register
     const UINT32 max_r = INS_MaxNumRRegs(ins); 
     for (unsigned int i=0; i<max_r; i++) {
-        REG read = INS_RegR(ins, i);
-        if (REG_is_gr(REG_FullRegName(read))) // just the general purpose registers
-            readRegMap[addr].insert(it, REG_FullRegName(read));
+        REG read = REG_FullRegName(INS_RegR(ins, i));
+        if (REG_is_gr(read)) // just the general purpose registers
+            readRegMap[addr].insert(it, read);
     }
+
     readRegMap[addr] = readList;
 
     if (INS_HasFallThrough(ins)) // FIXME
