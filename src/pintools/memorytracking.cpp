@@ -17,6 +17,7 @@ ofstream RegValuesFile;
 
 // globals
 bool flag=true;
+bool did_taint=false;
 
 char taint_array[TAINT_ARRAY_SIZE];
 std::set<ADDRINT>                  TMS; //tainted memory set
@@ -94,7 +95,8 @@ void print_tainted_addresses() {
 
 void print_all(ADDRINT ip, REG flags) {
     print_ins(ip, flags);
-    print_taint_array(false);
+    print_taint_array(did_taint);
+    did_taint = false;
     print_tainted_addresses();
 }
 
@@ -114,10 +116,12 @@ void print_all(ADDRINT ip, REG flags) {
 VOID binaryRWAnalysis(INS ins, ADDRINT addr, ADDRINT flag) {
     bool second_taint = false;
     // get the register from the map
-    if (secondOperandMap[addr] != REG_INVALID_)
+    if (secondOperandMap[addr] != REG_INVALID_) {
         second_taint = taint_array[secondOperandMap[addr]];
+    }
 
     bool op_taint = can_overflow(addr) && get_bit(flag, 11);
+    did_taint = op_taint;
 
     if (second_taint || op_taint) {
         TMS.insert(writeAddr);
@@ -134,12 +138,12 @@ VOID pushRWAnalysis(ADDRINT sp) {
     bool taint = TMS.find(readAddr) != TMS.end();
 
     if (taint) { // add to SP to set
-        cout << "SAVING: " << readAddr << endl;
-        TMS.insert(sp);
+        cout << "pushRW SAVING: " << readAddr << endl;
+        TMS.insert(writeAddr);
     }
     else {// otherwise remove it if present
-        cout << "ERASING: " << readAddr;
-        TMS.erase(sp);
+        cout << "pushRW ERASING: " << readAddr << endl;
+        TMS.erase(writeAddr);
     }       
 }
 
@@ -150,8 +154,9 @@ VOID pushRWAnalysis(ADDRINT sp) {
 VOID movWAnalysis(ADDRINT ip) { 
     bool taint = false;
 
-    if (secondOperandMap[ip] != REG_INVALID_)
+    if (secondOperandMap[ip] != REG_INVALID_) {
         taint = taint_array[secondOperandMap[ip]];
+    }
 
     if (taint) { // if reg contains an tainted value
         cout << "MOVING TAINT TO: " << writeAddr;
@@ -169,15 +174,16 @@ VOID movWAnalysis(ADDRINT ip) {
 VOID pushWAnalysis(ADDRINT ip, ADDRINT sp) { 
     bool taint = false;
 
-    if (secondOperandMap[ip] != REG_INVALID_)
+    if (secondOperandMap[ip] != REG_INVALID_) {
         taint = taint_array[secondOperandMap[ip]];
+    }
 
     if (taint) { // if pushed register is tainted; insert addr into set
         cout << "pushWAnalysis SAVING: " << std::hex << sp << endl;
         TMS.insert(sp);
     }
     else { // If pushed register is not tainted, remove that address from RBT.
-        cout << "ERASING: " << readAddr;
+        cout << "ERASING: " << readAddr << endl;
         TMS.erase(sp);
     }
 }
@@ -198,6 +204,7 @@ VOID taintAnalysis(ADDRINT ip, INS ins, REG flags) {
         taint = get_bit(flags, 11);
     if (taint) {
         taint_array[write_reg] = 1;
+        did_taint = true;
         //print_all(ip, flags);
         return;
     }

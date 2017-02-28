@@ -17,7 +17,13 @@ _start:
     mov     r8, 100 
     mov     rax, qword [rsp]
     mov     rax, 1
+    push    qword [rsp]
     mov     r12, qword [rsp+8]
+    mov     qword[rsp+8], 0
+    mov     r12, qword[rsp+8]
+    add     rdx, 20
+    add     ecx, 20
+    mov     r12, qword[rsp]
     pop     r10
     mov     rsi, msg
     mov     rdx, 13
