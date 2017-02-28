@@ -5,15 +5,14 @@ section .text
     global _start
 _start:
     mov     rdi, 1
-    mov     bx, 10000
-    mov     ax, 10000
+    mov     bx, 20000
+    mov     ax, 20000
     add     bx, ax 
-    add     bx, 10000
-    add     bx, 10000 
-    add     bx, 10000 
-    add     bx, 10000 
-    add     bx, 10000 
-    add     bx, 10000 
+    mov     cx, bx 
+    mov     r8, rcx 
+    mov     rdx, rbx 
+    mov     bx, 0
+    mov     r8, 100 
     mov     rax, 1
     mov     rsi, msg
     mov     rdx, 13
