@@ -1,28 +1,85 @@
 #include <iostream>
 #include <fstream>
 #include "pin.H"
-//#include "redblacktree.h"
 #include <bitset>
 #include <iomanip>
-//using namepace std;
-#include<set>
+#include <string>
+#include <set>
+#include <map>
+#include <list>
 
-//global variables
+#define TAINT_ARRAY_SIZE 50
+#define FLAGS_REG_INDEX  25
 
-//RBtree tAT;//tainted address tree
 
-ofstream OutFile6; // memory write instructions
-ofstream OutFile7; // memory read instructions
+// log files
+ofstream RegValuesFile; 
+
+// globals
 bool flag=true;
-UINT32 taintofReg;// used to set register taint for read addressing operations
-std::set<ADDRINT> TMS;//tainted memory set
 
+char taint_array[TAINT_ARRAY_SIZE];
+std::set<ADDRINT>                  TMS; //tainted memory set
+std::map<ADDRINT, REG>             writeRegMap;
+std::map<ADDRINT, REG>             secondOperandMap;
+std::map<ADDRINT, std::list<REG> > readRegMap;
+std::map<ADDRINT, std::string>     disAssemblyMap;
+std::map<ADDRINT, std::string>     categoryMap;
+std::map<ADDRINT, std::string>     mnemonicMap;
+std::map<REG,     std::string>     regNameMap;
 
 
 int get_bit(int value, int n) {
     // returns nonzero value if the nth bit is set
     // input n is zero-indexed
-    return (int) (value & (1 << n));
+    return (int) (value & (1 << n)) != 0;
+}
+
+// checks if the instruction producting the overflow should be regarded,
+// as some instructions commonly produce OF that is useless (MOV, JZ)
+// We are interested in arithmetic operations, 
+// excluding CMP which performs subtractions causing OFs
+bool can_overflow(ADDRINT ip) {
+    if (categoryMap[ip] != "BINARY")
+        return false;
+    if (mnemonicMap[ip] == "CMP")
+        return false;
+    return true;
+}
+
+void print_flags(REG flags) {
+    int f = flags;
+    for (int i=0; i<64; i++) {
+        if (f & 1)
+            RegValuesFile << "1";
+        else
+            RegValuesFile << "0";
+        f >>= 1;
+    }
+}
+
+void print_taint_array(bool taint) {
+    RegValuesFile << (taint ? "TAINT " : "      ");
+
+    char c;
+    for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
+        switch (taint_array[i]) {
+            case 0: RegValuesFile << " . ";
+                    break;
+            case 1: RegValuesFile << regNameMap[(REG)i];
+                    break;
+            case 2: RegValuesFile << regNameMap[(REG)i];
+                    break;
+        }
+    }
+    RegValuesFile << endl;
+}
+
+void print_ins(ADDRINT ip, REG flags){
+    RegValuesFile << std::left << std::setw(15) << std::hex << ip << " " << std::setw(10) << categoryMap[ip] << " " << std::setw(40) << disAssemblyMap[ip] << "; ";
+    //RegValuesFile << (taint ? "OF " : "   ");
+
+    //print_flags(flags);
 }
 
 
@@ -30,96 +87,125 @@ int get_bit(int value, int n) {
 // -----------------------------------------ANALYSIS ROUTINE--------------------
 ///////////////////////////////////////////////////////////////////////////////////
 
+// BOTH WRITE AND READ
+// Saves the tainted memory address to TMS.
+// The address is tainted if:
+//     1. we are saving a tainted register value
+//     2. the operation saving the value has overflowed,
+//        and that the operation is classified as having reasonable overflows,
+//        (as in the case of an add with the destination in memory)
+// Since the same location is being used as an input and a destination, there is no way
+// to remove the taint from it, even though the sum result and the register might be clean.
+VOID binaryRWAnalysis(INS ins, ADDRINT addr, ADDRINT EA, ADDRINT flag) {
+    bool second_taint = false;
+    // get the register from the map
+    if (secondOperandMap[addr] != REG_INVALID_)
+        second_taint = taint_array[secondOperandMap[addr]];
 
+    bool op_taint = can_overflow(ins) && get_bit(flag, 11);
 
-//// BOTH WRITE AND READ
-
-VOID taint_MemRW1(ADDRINT EA,ADDRINT flagreg){
-//reading from reg.
-
-std::set<ADDRINT>::iterator it=TMS.find(EA);
-
-	if(get_bit(flagreg,11) || taintofReg){
-		TMS.insert(EA);// EA is not included =>
-	} 
-
+    if (second_taint || op_taint) {
+        TMS.insert(EA);
+    }
 }
 
-VOID taint_MemRW2(ADDRINT EA,ADDRINT flagreg){
-//using IMM no reading from reg.
-//bool isIncluded=TMS.search(EA);
-//std::set<ADDRINT>::iterator it=TMS.find(EA);
+// PUSH analysis code
+// The read address is stored in EA
+// The write address is stored in sp
+// We overwrite sp with the taint value of EA
+// example: push qword ptr[rsp+0x58]
+VOID pushRWAnalysis(ADDRINT EA, ADDRINT sp) {
+    bool taint = TMS.find(EA) != TMD.end();
 
-	if(get_bit(flagreg,11)){
-		TMS.insert(EA);
-	} 
-
+    if (taint) // add to SP to set
+        TMS.insert(sp);
+    else // otherwise remove it if present
+        TMS.erase(sp);
 }
 
-VOID taint_MemRW3(ADDRINT EA,ADDRINT sp){
-//push qword ptr[rsp+0x58]
+// MOV writing to memory analysis code
+// example: mov qword ptr [reg+reg*scale+displacement], reg
+// MOV writes the value stored in a register to memory
+// We overwrite the taint of the memory location with the registers taint
+VOID movWAnalysis(ADDRINT addr, ADDRINT EA) { 
+    bool taint = false;
 
-ADDRINT nextspaddr=sp-8;
-std::set<ADDRINT>::iterator it=TMS.find(EA);
-// if readed address(EA) is tainted, sp should set and vice versa.
-if(it!=TMS.end())TMS.insert(nextspaddr);
-else TMS.erase(nextspaddr);
+    if (secondOperandMap[addr] != REG_INVALID_)
+        taint = taint_array[secondOperandMap[addr]];
 
-}
-//// ONLY MEMORY WRITE
-VOID taint_MemW1(ADDRINT EA){ // write the value stored in a register to memory
-
-//bool isIncluded=TMS.search(EA);// return true if address inside tree vice versa
-
-	if(taintofReg ) // if reg contains tainted val
-	TMS.insert(EA);
-
-	else  // if reg is not tainted, remove it.
-	TMS.erase(EA);
-	
-	//else std::cerr<<"UNKNOWN PATTERN-> function taintmemoryW"<<endl;
+    if (taint) // if reg contains an tainted value
+        TMS.insert(EA);
+    else  // if reg is not tainted, remove it.
+        TMS.erase(EA);
 }
 
-VOID taint_MemW2(ADDRINT EA){ // write IMM value to memory
+// register PUSH analysis code
+// example: PUSH eax
+// We overwrite the taint of the memory location with the registers taint
+VOID pushWAnalysis(ADDRINT addr, ADDRINT sp) { 
+    bool taint = false;
 
- TMS.erase(EA);
-	
+    if (secondOperandMap[addr] != REG_INVALID_)
+        taint = taint_array[secondOperandMap[addr]];
+
+    if (taint) // if pushed register is tainted; insert addr into set
+        TMS.insert(sp);
+    else // If pushed register is not tainted, remove that address from RBT.
+        TMS.erase(sp);
 }
 
-VOID taint_MemW3(ADDRINT sp){ // PUSH: not sure about -8, should check it again.
-ADDRINT nextspaddr=sp-8;
-//bool isIncluded=TMS.search(nextspaddr);
+// Operations writing to a register analysis
+// For any operation writing to a register, calculates the taint by looking at:
+//     1. Taint of register operands
+//     2. Taint of read memory address
+//     3. Whether the instruction has overflowed and it is regarded as overflowable
+VOID taintAnalysis(ADDRINT ip, INS ins, REG flags, ADDRING mem_addr) { 
+    print_ins(ip, flags);
 
-// if pushed register is tainted; insert addr into set
-if(taintofReg) TMS.insert(nextspaddr);
-// If pushed register is not tainted, remove that address from RBT.
-else  TMS.erase(nextspaddr);
+    // write to this
+    REG write_reg = writeRegMap[ip];
+
+    // if an overflow occured, taint the array at write_reg and return
+    bool taint = false;
+    if (can_overflow(ip))
+        taint = get_bit(flags, 11);
+    if (taint) {
+        taint_array[write_reg] = 1;
+        print_taint_array(true);
+        return;
+    }
+
+    // in case the taint didn't happen, either due to the op not being able to cause the overflow, 
+    // or if the overflow did not happen, check if any of the operands were tainted and taint the result
+    // the operands are registers and a possible memory address
+    taint = false;
+
+    // check if any of the registers are tainted
+    std::list<REG>::iterator it;
+    for(it = readRegMap[ip].begin(); it != readRegMap[ip].end(); ++it) {
+        REG read = *it;
+        // FIXME: better taint policy?
+        if (taint_array[read] != 0)
+            taint = true;
+    }
+
+    // check if the memory address is tainted
+    if (TMS.find(mem_addr) != TMD.end())
+        taint = true;
+
+    taint_array[write_reg] = taint ? 2 : 0;
+
+    print_taint_array(false);
 }
 
-////// ONLY MEMORY READ
-
-// ------ MOV,MOVSX,MOVZX,ADD,SUB---------- //
-VOID taint_MemR_MOV(ADDRINT EA, ADDRINT eflag){//effective addr,FLAG reg; update taint 
-//mov rax,qword ptr [ rip+ 0x221d26 ]
-//add r9, qword ptr[r8+0x8];  r9+addrval can also return tainted val,check flag
-
-
-std::set<ADDRINT>::iterator it=TMS.find(EA);
-//bool isIncluded=TMS.search(EA); //return true if address is tainted.
-
-if(it!=TMS.end()|| get_bit(eflag,11)) taintofReg=1; // if address tainted or summation of them is overflow, register will contain tainted value
-else taintofReg=0;  // vice versa.
-
-}
-
-
-VOID taint_MemR_POP(ADDRINT sp){
-std::set<ADDRINT>::iterator it=TMS.find(sp);
-
-
-if(it!=TMS.end()) taintofReg=1; // if sp address is tainted, reg should be set as tainted.
-else  taintofReg=0;
-
+// POP analysis
+// We look for the taint of the stack pointer address and assign it to the taint of the register
+VOID popAnalysis(ADDRINT ip, ADDRINT sp){
+    std::set<ADDRINT>::iterator it=TMS.find(sp);
+    bool taint = (it!=TMS.end()) ? 1 : 0;
+    
+    REG write_reg = writeRegMap[ip];
+    taint_array[write_reg] = taint;
 }
 
 
@@ -129,183 +215,182 @@ else  taintofReg=0;
 
 VOID Instruction(INS ins, VOID *v){
 
-if(flag){    // open files
+    if(flag){    // open files
+        // Mihailo's instrumentation setup
+        RegValuesFile.open("logs/values.out");
+        for (int i=0; i<TAINT_ARRAY_SIZE; i++)
+            taint_array[i] = 0;
 
-	OutFile6.setf(ios::app | ios::out);//open file
-        OutFile6.open("outputfiles/memtrack1.out");
+        flag=false;
+    }
 
-	OutFile7.setf(ios::app | ios::out);//open file
-        OutFile7.open("outputfiles/memtrack2.out");
-	flag=false;
-	}
+    /////////////////////////////////////////////
+    // Memory Instructions
+    ////////////////////////////////////////////
 
-/////////////////////////////////////////////
-// Memory Instructions
-////////////////////////////////////////////
+    if (INS_HasFallThrough(ins)) { // FIXME
 
-if(INS_IsMemoryWrite(ins)&&INS_IsMemoryRead ( ins)){//some instructions both read and write to mem.
-// i.e add qword ptr [rax+0x8], r14
-// for those ones, we need write or read (same) address. Also we should check if we are using reg or IMM value to call the function.
+        if(INS_IsMemoryWrite(ins) && INS_IsMemoryRead(ins)) { //some instructions both read and write to mem.
+            // i.e add qword ptr [rax+0x8], r14
+            // for those ones, we need write or read (same) address. Also we should check if we are using reg or IMM value to call the function.
 
-	if(INS_Opcode(ins)==8 || INS_Opcode(ins)==460 || INS_Opcode(ins) ==23 || INS_Opcode(ins)==761){
-	// ADD,OR,AND,SUB
+            // FIXME extract to a separate function
+            // ADD,OR,AND,SUB
+            // FIXME add other opcodes
+            if (INS_Opcode(ins)==8 || INS_Opcode(ins)==460 || INS_Opcode(ins) ==23 || INS_Opcode(ins)==761) {
 
-	//first we should check if we are using reg or IMM value to call the function
-	REG readR=REG_INVALID_;//which Reg is read!
-	UINT32 maximr=INS_MaxNumRRegs(ins);// # of read reg.
-	REG baseR=INS_OperandMemoryBaseReg(ins,0);
-	REG indexR=INS_OperandMemoryIndexReg(ins,0);
-	bool validIndex,validBase;// store validity of base and index register
-	validIndex=REG_valid(baseR);
-	validBase=REG_valid(indexR);
-	UINT32 regNo=0;	
-	
-		if(validBase && validIndex) regNo=2;
-		else if(validBase||validIndex) regNo=1;
-	
-		if(maximr>regNo) readR=INS_RegR(ins,maximr-1);// eg. add qword ptr [rip+offset],rdi
-			
-		REG flagreg=REG_GFLAGS;// need OF flag
-	
-		if(REG_valid(readR)){
-		// At this point I should get taint value of read register to feed to the analysis routine
-		
-	      //*****taintofReg= Mihailo should provide me...
-	
-		INS_InsertCall(ins,IPOINT_BEFORE,
-		   	   	(AFUNPTR)taint_MemRW1,
-		      		IARG_MEMORYREAD_EA,
-		      	//	IARG_UINT32,taintofReg,//taintofReg global:taint value of read register
-				IARG_REG_VALUE,flagreg,
-		      		IARG_END);	
-		}
+                // first we should check if we are using reg or IMM value to call the instruction
+                bool validIndex, validBase;// store validity of base and index register
+                REG baseR = INS_OperandMemoryBaseReg(ins, 0); 
+                validIndex = REG_valid(baseR);
+                REG indexR = INS_OperandMemoryIndexReg(ins, 0);
+                validBase=REG_valid(indexR);
+                UINT32 regNo=0;	
 
-		else  { //e.g mov qword ptr [rip+0x20ce05],0x0 
-		// IMM will be written to memory, clear taint of that address if it is set.	
-   		INS_InsertCall(ins,IPOINT_BEFORE,
-                       (AFUNPTR)taint_MemRW2,
-                       IARG_MEMORYREAD_EA,
-		       IARG_REG_VALUE,flagreg,
-                       IARG_END);
- 
-		}
-	//	else std:cerr<<"SADO"<<endl;
+                if (validBase && validIndex) 
+                    regNo = 2;
+                else if( validBase || validIndex) 
+                    regNo = 1;
 
-	}
+                // checking if the source operand is an immediate or a register
+                REG readR = REG_INVALID_; // which Reg is read!
+                UINT32 maximr = INS_MaxNumRRegs(ins); // # of read reg.
+                if (maximr > regNo) 
+                    readR = INS_RegR(ins, maximr - 1);// eg. add qword ptr [rip+offset],rdi
 
-	else if(INS_Opcode(ins)==633){ // what we should do for "PUSH" //push qword ptr [rip+0x3a3842], push reg
+                REG flagreg = REG_GFLAGS; // need OF flag
 
-	//std::cerr<<"PUSH not implemented yet"<<endl;
-		INS_InsertCall(ins,IPOINT_BEFORE,
-                       (AFUNPTR)taint_MemRW3,
-                       IARG_MEMORYREAD_EA,
-		       IARG_REG_VALUE,REG_ESP,
-                       IARG_END);
- 
+                // add the second operand to a map with this address
+                ADDRINT addr = INS_Address(ins);
+                secondOperandMap[addr] = (REG_valid(readR)) ? readR : REG_INVALID_;
 
-	
-	}
-	else std::cerr<<"Undefined 'Both Read&Write Mem Inst'!"<<"disassembling...	"<<INS_Disassemble(ins)<<endl;
+                // if the second operand is a register
+                INS_InsertCall(ins, IPOINT_AFTER,
+                        (AFUNPTR) binaryRWAnalysis,
+                        IARG_UINT32, ins,
+                        IARG_INST_PTR,
+                        IARG_MEMORYREAD_EA,
+                        IARG_REG_VALUE, flagreg,
+                        IARG_END);	
+            }
+            
+            // what we should do for "PUSH" 
+            // push qword ptr [rip+0x3a3842]
+            // TODO test me
+            else if(INS_Opcode(ins) == 633) { 
+                INS_InsertCall(ins, IPOINT_AFTER,
+                        (AFUNPTR) pushRWAnalysis,
+                        IARG_MEMORYREAD_EA,
+                        IARG_REG_VALUE, REG_ESP,
+                        IARG_END);
+            }
+            else 
+                std::cerr << "Undefined 'Both Read&Write Mem Inst'! Disassembling... 	" << INS_Disassemble(ins) << endl;
+        }
 
-}
+        // TODO check if there is an op 
+        //  Only memory write instruction
+        else if (INS_IsMemoryWrite(ins)) {
 
-//  Only memory write instruction
-else if(INS_IsMemoryWrite(ins)){
+            //MOV 
+            if (INS_Opcode(ins) == 397){
+                bool validIndex, validBase; // store validity of base and index register
+                REG baseR = INS_OperandMemoryBaseReg(ins,0);
+                validIndex = REG_valid(baseR);
+                REG indexR = INS_OperandMemoryIndexReg(ins,0);
+                validBase = REG_valid(indexR);
+                UINT32 regNo = 0;	
 
-OutFile6<<std::left<<std::setw(6)<<INS_Opcode(ins)<<" "<<std::setw(10)<<INS_Mnemonic(ins)<<"  " <<std::setw(32)<<INS_Disassemble(ins)<<endl;
-	
-	if(INS_Opcode(ins)==397){
-	//MOV 
-	REG readR=REG_INVALID_;//which Reg is read!
-	UINT32 maximr=INS_MaxNumRRegs(ins);// # of read reg.
-	REG baseR=INS_OperandMemoryBaseReg(ins,0);
-	REG indexR=INS_OperandMemoryIndexReg(ins,0);
-	bool validIndex,validBase;// store validity of base and index register
-	validIndex=REG_valid(baseR);
-	validBase=REG_valid(indexR);
-	UINT32 regNo=0;	
-	
-		if(validBase && validIndex) regNo=2;
-		else if(validBase||validIndex) regNo=1;
-	
-		if(maximr>regNo) readR=INS_RegR(ins,maximr-1);// eg. mov qword ptr [rip+offset],rdi
-		//else readR=INS_RegR(ins,maximr);// this should return INVALID
+                if (validBase && validIndex) 
+                    regNo=2;
+                else if (validBase || validIndex) 
+                    regNo=1;
 
-		if(REG_valid(readR)){
-		// At this point I should get taint value of read register to feed to the analysis routine
-		//taintofReg= Mihailo should provide me...	
-		INS_InsertCall(ins,IPOINT_BEFORE,
-		   	   	(AFUNPTR)taint_MemW1,
-		      		IARG_MEMORYWRITE_EA,
-		      	//	IARG_UINT32,taintofReg,//taintofReg global, no need pass as argument.
-		      		IARG_END);	
-		}
+                REG readR = REG_INVALID_; //which Reg is read!
+                UINT32 maximr = INS_MaxNumRRegs(ins); // # of read reg.
+                if (maximr > regNo) 
+                    readR = INS_RegR(ins, maximr - 1); // eg. mov qword ptr [rip+offset],rdi
 
-		else{ //e.g mov qword ptr [rip+0x20ce05],0x0 
-		// IMM will be written to memory, clear taint of that address if it is set.	
-   		INS_InsertCall(ins,IPOINT_BEFORE,
-                       (AFUNPTR)taint_MemW2,
-                       IARG_MEMORYWRITE_EA,
-                       IARG_END);
- 
-		}
-	}	
+                // add the register operand to a map with this address
+                ADDRINT addr = INS_Address(ins);
+                secondOperandMap[addr] = (REG_valid(readR)) ? readR : REG_INVALID_;
 
-	else if(INS_Opcode(ins)==633){
-	// Mihailo should provide me the taint value of pushed register
-		//taintofReg= ....
-	//std::cerr<<"PUSH instruction is not implemented yet."<<endl;
-		INS_InsertCall(ins,IPOINT_BEFORE,
-		   	   	(AFUNPTR)taint_MemW3,// for push funct. if reg tainted add
-		      		IARG_REG_VALUE,REG_ESP,// stack pointer(-8) will be inserted into RBT.
-		      	   	IARG_END);	
-			}	
-	else std::cerr<<"Undefined 'Only Write Mem Inst'! disassembling..."<<INS_Disassemble(ins)<<endl;
+                // At this point I should get taint value of read register to feed to the analysis routine
+                INS_InsertCall(ins, IPOINT_AFTER,
+                        (AFUNPTR) movWAnalysis,
+                        IARG_INST_PTR,
+                        IARG_MEMORYWRITE_EA,
+                        IARG_END);	
+            }	
 
-}
-else if(INS_IsMemoryRead ( ins)){ //// Memory Read Instructions
+            // pushing a register
+            else if(INS_Opcode(ins) == 633){
+                INS_InsertCall(ins,IPOINT_AFTER,
+                        (AFUNPTR) pushWAnalysis, // for push funct. if reg tainted add
+                        IARG_REG_VALUE, REG_ESP, 
+                        IARG_END);	
+            }	
+            else std::cerr<<"Undefined 'Only Write Mem Inst'! disassembling..."<<INS_Disassemble(ins)<<endl;
 
+        }
 
-	if(INS_Opcode(ins)==397 || INS_Opcode(ins)==433 || INS_Opcode(ins) || INS_Opcode(ins)==761 || INS_Opcode(ins)==8 || INS_Opcode(ins)==1483){
-	// MOV,MOVSXD,MOVZX,SUB,ADD,XOR
+        // Result possibly saved to register, operands are registers and memory 
+        // The taint can come from the registers or memory, and the operation can overflow introducting taint
+        //else if (INS_IsMemoryRead(ins)) { 
+        else { 
+            // NOTE: REG baseR=INS_OperandMemoryBaseReg(ins,1);
+            // check if should be 1 or 0
 
-	/*REG baseR=INS_OperandMemoryBaseReg(ins,1);
-	REG indexR=INS_OperandMemoryIndexReg(ins,1);
-	ADDRINT displacement=INS_OperandMemoryDisplacement(ins,1);
-	UINT32 scale=INS_OperandMemoryScale(ins,1);*/
+            // POP instruction
+            // FIXME this might not be needed as the taintAnalysis below should take care of it
+            else if (INS_Opcode(ins) == 580) {
+                INS_InsertCall(ins, IPOINT_AFTER,
+                        (AFUNPTR) popAnalysis,
+                        IARG_INST_PTR,
+                        IARG_REG_VALUE, REG_ESP,
+                        IARG_END);	
+            }
+            else {
 
-	
-	// Effective address=Displacement+BaseReg+IndexReg*Scale
+                // FIXME starting integration here
 
-	INS_InsertCall(ins, IPOINT_BEFORE,
-                      (AFUNPTR)taint_MemR_MOV,
-                      IARG_MEMORYREAD_EA,//effective read address
-		      IARG_REG_VALUE,REG_GFLAGS,
-		      IARG_END);	
+                ADDRINT addr         = INS_Address(ins);
+                disAssemblyMap[addr] = INS_Disassemble(ins);
+                categoryMap[addr]    = CATEGORY_StringShort(INS_Category(ins));
+                mnemonicMap[addr]    = INS_Mnemonic(ins);
+                
+                // get the write register, get the original from it, and check if it is general purpose
+                REG write_to = INS_RegW(ins, 0);
+                write_to = REG_FullRegName(write_to); // (EAX, AX, AH, AL) -> RAX
+                regNameMap[write_to] = REG_StringShort(write_to);
+                if (REG_is_gr(write_to))
+                    writeRegMap[addr] = write_to;
 
-	//REG writeR=INS_RegW(ins,0);//written register, should be updated by Mihailo
-	//MIHAILO should update taint status of writeR,written register, by assigning thetaintofReg variable.
-	
+                // filling read registers
+                std::list<REG> readList;
+                std::list<REG>::iterator it;
+                it = readList.begin();
 
-	}
-	else if(INS_Opcode(ins)==580){
-	//std::cerr<<"POP instruction is not implemented yet."<<endl;
-	
-	//Reg temp=INS_RegW(ins,0);// one reg will be written by popped value
-		INS_InsertCall(ins, IPOINT_BEFORE,
-                      (AFUNPTR)taint_MemR_POP,
-		      IARG_REG_VALUE,REG_ESP,
-		      IARG_END);	
-	// Mihailo should update the taint status of written reg after insertcall
+                // FIXME disregard base and index register
+                const UINT32 max_r = INS_MaxNumRRegs(ins); 
+                for (unsigned int i=0; i<max_r; i++) {
+                    REG read = REG_FullRegName(INS_RegR(ins, i));
+                    if (REG_is_gr(read)) // just the general purpose registers
+                        readRegMap[addr].insert(it, read);
+                }
 
-	}
-	else
-	std::cerr<<"Undefined 'Only Read Mem Inst'! disassembling..."<<INS_Disassemble(ins)<<endl;
+                readRegMap[addr] = readList;
 
-	OutFile7<<std::left<<std::setw(6)<<INS_Opcode(ins)<<" "<<std::setw(10)<<INS_Mnemonic(ins)<<"  " <<std::setw(32)<<INS_Disassemble(ins)<<endl;
-
-	}
-
+                INS_InsertCall(ins, IPOINT_AFTER, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
+                    (AFUNPTR) taintAnalysis,
+                    IARG_INST_PTR,
+                    IARG_UINT32, ins,
+                    IARG_REG_VALUE, FLAGS_REG_INDEX,
+                    IARG_MEMORYREAD_EA,
+                    IARG_END);
+            }
+        }
+    }    
 }
 
 
@@ -314,10 +399,8 @@ else if(INS_IsMemoryRead ( ins)){ //// Memory Read Instructions
 // This function is called when the application exits
 VOID Fini(INT32 code, VOID *v)
 {
-    OutFile6.close(); 
-    OutFile7.close();
-	for(std::set<ADDRINT>::iterator it=TMS.begin();it!=TMS.end();++it) std::cout<<' '<<*it;
-	std::cout<<"END OF PINTOOL"<<endl;
+    for(std::set<ADDRINT>::iterator it=TMS.begin();it!=TMS.end();++it) std::cout<<' '<<*it;
+    std::cout<<"END OF PINTOOL"<<endl;
 }
 /////////
 
@@ -333,19 +416,19 @@ int main(int argc, char * argv[]){
 
     if (PIN_Init(argc, argv)) return Usage();
 
-   // Register Instruction to be called to instrument instructions
+    // Register Instruction to be called to instrument instructions
     INS_AddInstrumentFunction(Instruction, 0);
 
     // Register Fini to be called when the application exits
     PIN_AddFiniFunction(Fini, 0);
-    
+
     // Start the program, never returns
     PIN_StartProgram();
-    
+
     return 0;
 
 
 
 
-return 0;
+    return 0;
 }
