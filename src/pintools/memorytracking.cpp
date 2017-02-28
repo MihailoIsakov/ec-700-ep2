@@ -61,7 +61,6 @@ void print_flags(REG flags) {
 void print_taint_array(bool taint) {
     RegValuesFile << (taint ? "TAINT " : "      ");
 
-    char c;
     for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
         switch (taint_array[i]) {
             case 0: RegValuesFile << " . ";
@@ -102,7 +101,7 @@ VOID binaryRWAnalysis(INS ins, ADDRINT addr, ADDRINT EA, ADDRINT flag) {
     if (secondOperandMap[addr] != REG_INVALID_)
         second_taint = taint_array[secondOperandMap[addr]];
 
-    bool op_taint = can_overflow(ins) && get_bit(flag, 11);
+    bool op_taint = can_overflow(addr) && get_bit(flag, 11);
 
     if (second_taint || op_taint) {
         TMS.insert(EA);
@@ -115,7 +114,7 @@ VOID binaryRWAnalysis(INS ins, ADDRINT addr, ADDRINT EA, ADDRINT flag) {
 // We overwrite sp with the taint value of EA
 // example: push qword ptr[rsp+0x58]
 VOID pushRWAnalysis(ADDRINT EA, ADDRINT sp) {
-    bool taint = TMS.find(EA) != TMD.end();
+    bool taint = TMS.find(EA) != TMS.end();
 
     if (taint) // add to SP to set
         TMS.insert(sp);
@@ -159,7 +158,7 @@ VOID pushWAnalysis(ADDRINT addr, ADDRINT sp) {
 //     1. Taint of register operands
 //     2. Taint of read memory address
 //     3. Whether the instruction has overflowed and it is regarded as overflowable
-VOID taintAnalysis(ADDRINT ip, INS ins, REG flags, ADDRING mem_addr) { 
+VOID taintAnalysis(ADDRINT ip, INS ins, REG flags, ADDRINT mem_addr) { 
     print_ins(ip, flags);
 
     // write to this
@@ -190,7 +189,7 @@ VOID taintAnalysis(ADDRINT ip, INS ins, REG flags, ADDRING mem_addr) {
     }
 
     // check if the memory address is tainted
-    if (TMS.find(mem_addr) != TMD.end())
+    if (TMS.find(mem_addr) != TMS.end())
         taint = true;
 
     taint_array[write_reg] = taint ? 2 : 0;
@@ -343,7 +342,7 @@ VOID Instruction(INS ins, VOID *v){
 
             // POP instruction
             // FIXME this might not be needed as the taintAnalysis below should take care of it
-            else if (INS_Opcode(ins) == 580) {
+            if (INS_Opcode(ins) == 580) {
                 INS_InsertCall(ins, IPOINT_AFTER,
                         (AFUNPTR) popAnalysis,
                         IARG_INST_PTR,
