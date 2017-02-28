@@ -60,10 +60,9 @@ void print_flags(REG flags) {
     }
 }
 
-void print_taint_array() {
-    //for (int i=0; i<TAINT_ARRAY_SIZE; i++)
-        //RegValuesFile << taint_array[i];
-    //RegValuesFile << "\t";
+void print_taint_array(bool taint) {
+    RegValuesFile << (taint ? "TAINT " : "      ");
+
     char c;
     for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
         switch (taint_array[i]) {
@@ -74,8 +73,8 @@ void print_taint_array() {
             case 2: RegValuesFile << regNameMap[(REG)i];
                     break;
         }
-        
     }
+    RegValuesFile << endl;
 }
 
 void print_ins(ADDRINT ip, REG flags){
@@ -90,8 +89,7 @@ VOID taint(ADDRINT ip, INS ins, REG flags) {
 
     // in case nothing is written to a register, return
     if (writeRegMap.count(ip) == 0) {
-        print_taint_array();
-        RegValuesFile << endl;
+        print_taint_array(false);
         return;
     }
 
@@ -104,37 +102,26 @@ VOID taint(ADDRINT ip, INS ins, REG flags) {
         taint = get_bit(flags, 11);
     if (taint) {
         taint_array[write_reg] = 1;
-        print_taint_array();
-        RegValuesFile << endl;
+        print_taint_array(true);
         return;
     }
+    
+
 
     // in case the taint didn't happen, either due to the op not being able to cause the overflow, 
     // or if the overflow did not happen, check if any of the operands were tainted and taint the result
     const UINT32 max_r = INS_MaxNumRRegs(ins); 
     taint = false;
 
-    //cout << disAssemblyMap[ip] << "  " << max_r << endl;
-    cout << ip << "  size: " << readRegMap[ip].size() << endl;
     std::list<REG>::iterator it;
     for(it = readRegMap[ip].begin(); it != readRegMap[ip].end(); ++it) {
         REG read = *it;
         if (taint_array[read] != 0)
             taint = true;
     }
-
-    //for (int i=0; i<max_r; i++) {
-        //REG read = INS_RegR(ins, i);
-        ////cout << REG_StringShort(read) << endl;
-        //if (REG_is_gr(read)) // just the general purpose registers
-            //if (taint_array[read] != 0) // if tainted
-                //taint = true;
-    //}
-
     taint_array[write_reg] = taint ? 2 : 0;
 
-    print_taint_array();
-    RegValuesFile << endl;
+    print_taint_array(false);
 }
 
 
@@ -166,7 +153,6 @@ VOID Instruction(INS ins, VOID *v)
     std::list<REG>::iterator it;
     it = readList.begin();
 
-    //cout <<"IP: " << addr   << endl;
     const UINT32 max_r = INS_MaxNumRRegs(ins); 
     for (unsigned int i=0; i<max_r; i++) {
         REG read = INS_RegR(ins, i);
