@@ -11,12 +11,25 @@
 #define TAINT_ARRAY_SIZE 25
 #define FLAGS_REG_INDEX  25
 
+// malloc function hunting
+#if defined(TARGET_MAC)
+#define MALLOC "_malloc"
+#define FREE "_free"
+#define MEMCPY "__libc_memalign"
+#else
+#define MALLOC "malloc"
+#define FREE "free"
+#define MEMCPY "__libc_memalign"
+#endif
+
+//#define DEBUG
+
 
 // log files
 ofstream RegValuesFile; 
+std::ofstream TraceFile;
 
 // globals
-bool flag=true;
 bool did_taint=false;
 
 char taint_array[TAINT_ARRAY_SIZE];
@@ -53,7 +66,7 @@ bool can_overflow(ADDRINT ip) {
 
 void print_flags(REG flags) {
     int f = flags;
-    for (int i=0; i<64; i++) {
+    for (int i=0; i<12; i++) {
         if (f & 1)
             RegValuesFile << "1";
         else
@@ -63,7 +76,7 @@ void print_flags(REG flags) {
 }
 
 void print_taint_array(bool taint) {
-    RegValuesFile << (taint ? "TAINT " : "      ");
+    RegValuesFile << (taint ? "OF " : "   ");
 
     for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
         switch (taint_array[i]) {
@@ -79,9 +92,8 @@ void print_taint_array(bool taint) {
 
 void print_ins(ADDRINT ip, REG flags){
     RegValuesFile << std::left << std::setw(15) << std::hex << ip << " " << std::setw(10) << categoryMap[ip] << " " << std::setw(40) << disAssemblyMap[ip] << "; ";
-    //RegValuesFile << (taint ? "OF " : "   ");
 
-    //print_flags(flags);
+    print_flags(flags);
 }
 
 void print_tainted_addresses() {
@@ -128,7 +140,6 @@ VOID binaryRWAnalysis(INS ins, ADDRINT addr, ADDRINT flag) {
 
     if (second_taint || op_taint) {
         TMS.insert(writeAddr);
-        cout << "SAVING: " << readAddr << endl;
     }
 }
 
@@ -141,11 +152,9 @@ VOID pushRWAnalysis(ADDRINT sp) {
     bool taint = TMS.find(readAddr) != TMS.end();
 
     if (taint) { // add to SP to set
-        cout << "pushRW SAVING: " << readAddr << endl;
         TMS.insert(writeAddr);
     }
     else { // otherwise remove it if present
-        cout << "pushRW ERASING: " << readAddr << endl;
         TMS.erase(writeAddr);
     }       
 }
@@ -162,11 +171,9 @@ VOID movWAnalysis(ADDRINT ip) {
     }
 
     if (taint) { // if reg contains an tainted value
-        cout << "MOVING TAINT TO: " << writeAddr;
         TMS.insert(writeAddr);
     } 
     else { // if reg is not tainted, remove it.
-        cout << "ERASING: " << readAddr;
         TMS.erase(writeAddr);
     }
 }
@@ -182,11 +189,9 @@ VOID pushWAnalysis(ADDRINT ip, ADDRINT sp) {
     }
 
     if (taint) { // if pushed register is tainted; insert addr into set
-        cout << "pushWAnalysis SAVING: " << std::hex << sp << endl;
         TMS.insert(sp);
     }
     else { // If pushed register is not tainted, remove that address from RBT.
-        cout << "ERASING: " << readAddr << endl;
         TMS.erase(sp);
     }
 }
@@ -227,7 +232,6 @@ VOID taintAnalysis(ADDRINT ip, INS ins, REG flags) {
 
     // check if the memory address is tainted
     if (validReadAddr) { // only if we are actually reading in this instruction
-        cout << readAddr;
         if (TMS.find(readAddr) != TMS.end())
             taint = true;
     }
@@ -273,6 +277,53 @@ VOID setWriteInvalid() {
     validWriteAddr = false;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//---------------------------------------IMAGE ANALYSYS--------------------------------------
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+VOID mallocPrintBefore(CHAR * name, ADDRINT size)
+{
+	TraceFile << name << "(" << size << ")" << endl;
+	//	std::cout<<"Arg1MallocBefore"<<endl;
+}
+
+VOID mallocPrintAfter(ADDRINT ret)
+{
+
+	TraceFile << "  returns " << ret << endl;
+
+	//	std::cout<<"MallocAfter"<<endl;
+
+}
+
+VOID Arg1Memcpy(CHAR * name, ADDRINT size, ADDRINT arg1,ADDRINT arg2)
+{
+	TraceFile << name << "(" << size << ")" << "(" << arg1 << ")" <<"(" << arg2 << ")" <<endl;
+}
+
+VOID mallocExitOnTaint() {
+    cout << endl;
+    for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
+        switch (taint_array[i]) {
+            case 0: cout << ".   ";
+                    break;
+            case 1: cout << std::setw(4) << regNameMap[(REG)i];
+                    break;
+            case 2: cout << std::setw(4) << regNameMap[(REG)i];
+                    break;
+        }
+    }
+    cout << endl;
+    REG rdi = REG_FullRegName(REG_EDI); 
+    bool taint = taint_array[rdi];
+    cout << "RDI index: " << rdi << endl;
+    if (taint) {
+        cerr << endl << "No one expects the spanish inquisition!" << endl;
+        PIN_ExitProcess(1);
+    }
+    else
+        cout << endl << "These are not the droids you're looking for. " << endl;
+}
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -281,14 +332,6 @@ VOID setWriteInvalid() {
 
 VOID Instruction(INS ins, VOID *v){
 
-    if(flag){    // open files
-        // Mihailo's instrumentation setup
-        RegValuesFile.open("/disk/logs/values.out");
-        for (int i=0; i<TAINT_ARRAY_SIZE; i++)
-            taint_array[i] = 0;
-
-        flag=false;
-    }
     
     /////////////////////////////////////////////
     // bookeeping 
@@ -354,7 +397,7 @@ VOID Instruction(INS ins, VOID *v){
                 REG readR = REG_INVALID_; // which Reg is read!
                 UINT32 maximr = INS_MaxNumRRegs(ins); // # of read reg.
                 if (maximr > regNo) 
-                    readR = INS_RegR(ins, maximr - 1);// eg. add qword ptr [rip+offset],rdi
+                    readR = REG_FullRegName(INS_RegR(ins, maximr - 1));// eg. add qword ptr [rip+offset],rdi
 
                 REG flagreg = REG_GFLAGS; // need OF flag
 
@@ -382,8 +425,10 @@ VOID Instruction(INS ins, VOID *v){
                         IARG_REG_VALUE, REG_ESP,
                         IARG_END);
             }
+            #ifdef DEBUG
             else 
                 std::cerr << "Undefined 'Both Read&Write Mem Inst'! Disassembling... 	" << INS_Disassemble(ins) << endl;
+            #endif
         }
 
         // TODO check if there is an op 
@@ -407,7 +452,7 @@ VOID Instruction(INS ins, VOID *v){
                 REG readR = REG_INVALID_; //which Reg is read!
                 UINT32 maximr = INS_MaxNumRRegs(ins); // # of read reg.
                 if (maximr > regNo) 
-                    readR = INS_RegR(ins, maximr - 1); // eg. mov qword ptr [rip+offset],rdi
+                    readR = REG_FullRegName(INS_RegR(ins, maximr - 1)); // eg. mov qword ptr [rip+offset],rdi
 
                 // add the register operand to a map with this address
                 ADDRINT addr = INS_Address(ins);
@@ -434,7 +479,10 @@ VOID Instruction(INS ins, VOID *v){
                         IARG_REG_VALUE, REG_ESP, 
                         IARG_END);	
             }	
-            else std::cerr<<"Undefined 'Only Write Mem Inst'! disassembling..."<<INS_Disassemble(ins)<<endl;
+            #ifdef DEBUG
+            else 
+                std::cerr<<"Undefined 'Only Write Mem Inst'! disassembling..."<<INS_Disassemble(ins)<<endl;
+            #endif
 
         }
 
@@ -488,6 +536,72 @@ VOID Instruction(INS ins, VOID *v){
     }    
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//---------------------------------------IMAGE INSTRUMENTATION--------------------------------------
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Instrument the malloc() and free() functions.  Print the input argument
+// of each malloc() or free(), and the return value of malloc().
+VOID Image(IMG img, VOID *v)
+{
+
+
+	//std::cout<< IMG_Name(img)<<endl;	//
+	//  Find the malloc() function.
+	RTN mallocRtn = RTN_FindByName(img, MALLOC);
+	if (RTN_Valid(mallocRtn)) {
+		RTN_Open(mallocRtn);
+		//std::cout<<"MALLOC:"<<INS_Disassemble(img)<<endl;
+		//Mihailo: Check if the RDI is tainted and if that is the case EXCEPTION!!!!!!!
+		// Instrument malloc() to print the input argument value and the return value.
+        RTN_InsertCall(mallocRtn,
+                IPOINT_BEFORE, (AFUNPTR) mallocExitOnTaint, IARG_END);
+
+		//RTN_InsertCall(mallocRtn, 
+                //IPOINT_BEFORE, (AFUNPTR) mallocPrintBefore,
+				//IARG_ADDRINT, MALLOC,
+				//IARG_FUNCARG_ENTRYPOINT_VALUE, 0,
+				//IARG_END);
+
+		//RTN_InsertCall(mallocRtn, 
+                //IPOINT_AFTER, (AFUNPTR) mallocPrintAfter,
+				//IARG_FUNCRET_EXITPOINT_VALUE, 
+                //IARG_END);
+
+
+		RTN_Close(mallocRtn);
+	}
+
+	// Find the free() function.
+	//RTN freeRtn = RTN_FindByName(img, FREE);
+	//if (RTN_Valid(freeRtn))
+	//{
+		//RTN_Open(freeRtn);
+		//// Instrument free() to print the input argument value.
+		//RTN_InsertCall(freeRtn, IPOINT_BEFORE, (AFUNPTR)Arg1Before,
+				//IARG_ADDRINT, FREE,
+				//IARG_FUNCARG_ENTRYPOINT_VALUE, 0,
+				//IARG_END);
+		//RTN_Close(freeRtn);
+	//}
+
+	//// Find the memcpy() function
+	//RTN memcpyRtn=RTN_FindByName(img,MEMCPY);
+	//if(RTN_Valid(memcpyRtn)){
+
+		//RTN_Open(memcpyRtn);
+		//RTN_InsertCall(memcpyRtn, IPOINT_BEFORE, (AFUNPTR)Arg1Memcpy,
+				//IARG_ADDRINT, MEMCPY,
+				//IARG_FUNCARG_ENTRYPOINT_VALUE, 0,	IARG_FUNCARG_ENTRYPOINT_VALUE, 1,
+
+
+				//IARG_FUNCARG_ENTRYPOINT_VALUE, 2,
+				//IARG_END);
+		//RTN_Close(memcpyRtn);
+	//}
+
+
+}
 
 //////// Finish fun ////////////
 
@@ -508,12 +622,24 @@ INT32 Usage()
 
 int main(int argc, char * argv[]){
 
+    RegValuesFile.open("/disk/logs/values.out");
+    for (int i=0; i<TAINT_ARRAY_SIZE; i++)
+        taint_array[i] = 0;
+    
+    TraceFile.setf(ios::app | ios::out);
+    TraceFile.open("/disk/logs/malloc_log.out");
 
+
+
+	// Initialize pin
+	PIN_InitSymbols();
 
     if (PIN_Init(argc, argv)) return Usage();
 
     // Register Instruction to be called to instrument instructions
     INS_AddInstrumentFunction(Instruction, 0);
+
+	IMG_AddInstrumentFunction(Image, 0);
 
     // Register Fini to be called when the application exits
     PIN_AddFiniFunction(Fini, 0);
