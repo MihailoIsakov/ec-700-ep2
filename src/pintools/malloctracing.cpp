@@ -16,23 +16,17 @@
 #if defined(TARGET_MAC)
 #define MALLOC "_malloc"
 #define FREE "_free"
-#define MEMCPY "_memcpy"
+#define MEMCPY "_wmemcpy"
 #else
 #define MALLOC "malloc"
 #define FREE "free"
-#define MEMCPY "memcpy"
+#define MEMCPY "__libc_memalign"
 #endif
 
 
-//ofstream OutFile2;// OPCODES, disassemble format  //op_disass_taint.out
-//ofstream OutFile3; // FLAGS  // flags_taint.out
-//ofstream OutFile4; // GENERAL PURPOSE REGISTER VALUES //gp_regval_taint.out
-//ofstream OutFile6;
-//ofstream OutFile7; // memory read instructions
-//ofstream OutFile8; // memory both write&read instructions
 std::ofstream TraceFile;
 std::ofstream TraceFile2;
-
+std::ofstream TraceFile3;
 
 bool flag=true;
 
@@ -48,7 +42,7 @@ std::set<ADDRINT> taintedAddr;
 VOID Arg1Before(CHAR * name, ADDRINT size)
 {
 	TraceFile << name << "(" << size << ")" << endl;
-	std::cout<<"Arg1MallocBefore"<<endl;
+	//	std::cout<<"Arg1MallocBefore"<<endl;
 }
 
 VOID MallocAfter(ADDRINT ret)
@@ -56,30 +50,36 @@ VOID MallocAfter(ADDRINT ret)
 
 	TraceFile << "  returns " << ret << endl;
 
-	std::cout<<"MallocAfter"<<endl;
+	//	std::cout<<"MallocAfter"<<endl;
 
 }
 
-VOID Arg1Memcpy(CHAR * name, ADDRINT size)
+VOID Arg1Memcpy(CHAR * name, ADDRINT size,ADDRINT arg1,ADDRINT arg2)
 {
-	TraceFile << name << "(" << size << ")" << endl;
+	TraceFile << name << "(" << size << ")" << "(" << arg1 << ")" <<"(" << arg2 << ")" <<endl;
 	std::cout<<"Arg1MemcpyBefore"<<endl;
 }
 
+VOID Routine  (RTN rtn,VOID *v){
+
+	TraceFile3<<RTN_Name(rtn)<<endl;
+
+
+}
 
 VOID Image(IMG img, VOID *v)
 {
 	// Instrument the malloc() and free() functions.  Print the input argument
 	// of each malloc() or free(), and the return value of malloc().
 
-	//
+	std::cout<< IMG_Name(img)<<endl;	//
 	//  Find the malloc() function.
 	RTN mallocRtn = RTN_FindByName(img, MALLOC);
 	if (RTN_Valid(mallocRtn))
 	{
 		RTN_Open(mallocRtn);
 		//std::cout<<"MALLOC:"<<INS_Disassemble(img)<<endl;
-		TraceFile2<<"IMAGE"<<endl;
+		//		TraceFile2<<"IMAGE"<<endl;
 		//Mihailo: Check if the RDI is tainted and if that is the case EXCEPTION!!!!!!!
 		// Instrument malloc() to print the input argument value and the return value.
 		RTN_InsertCall(mallocRtn, IPOINT_BEFORE, (AFUNPTR)Arg1Before,
@@ -106,13 +106,16 @@ VOID Image(IMG img, VOID *v)
 	}
 
 	// Find the memcpy() function
-	RTN memcpyRtn=RTN_FindByName(img,"memcpy");
+	RTN memcpyRtn=RTN_FindByName(img,MEMCPY);
 	if(RTN_Valid(memcpyRtn)){
 
 		RTN_Open(memcpyRtn);
 		RTN_InsertCall(memcpyRtn, IPOINT_BEFORE, (AFUNPTR)Arg1Memcpy,
 				IARG_ADDRINT, MEMCPY,
-				IARG_FUNCARG_ENTRYPOINT_VALUE, 0,
+				IARG_FUNCARG_ENTRYPOINT_VALUE, 0,	IARG_FUNCARG_ENTRYPOINT_VALUE, 1,
+
+
+				IARG_FUNCARG_ENTRYPOINT_VALUE, 2,
 				IARG_END);
 		RTN_Close(memcpyRtn);
 	}
@@ -137,6 +140,9 @@ VOID Instruction(INS ins, VOID *v)
 
 		TraceFile2.setf(ios::app | ios::out);
 		TraceFile2.open("outputfiles/mallocsado2.out");
+		TraceFile3.setf(ios::app | ios::out);
+		TraceFile3.open("outputfiles/mallocsado3.out");
+
 
 		flag=false;
 	}
@@ -158,6 +164,7 @@ VOID Fini(INT32 code, VOID *v)
 	// Write to a file since cout and cerr maybe closed by the application
 	TraceFile.close();
 	TraceFile2.close();
+	TraceFile3.close();
 }
 
 
@@ -177,6 +184,7 @@ int main(int argc, char * argv[])
 	INS_AddInstrumentFunction(Instruction, 0);
 	// Register Image to be called to instrument functions.
 
+	RTN_AddInstrumentFunction(Routine, 0);	
 	IMG_AddInstrumentFunction(Image, 0);
 	// Register Fini to be called when the application exits
 	PIN_AddFiniFunction(Fini, 0);
