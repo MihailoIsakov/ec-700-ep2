@@ -8,7 +8,7 @@
 #include <map>
 #include <list>
 
-#define TAINT_ARRAY_SIZE 24
+#define TAINT_ARRAY_SIZE 25
 #define FLAGS_REG_INDEX  25
 
 
@@ -90,11 +90,16 @@ void print_tainted_addresses() {
         RegValuesFile << *it << ", ";
 }
 
-void print_all(ADDRINT ip, REG flags) {
+void printESP(REG esp) {
+    RegValuesFile << "ESP: " << esp <<"; ";
+}
+
+void print_all(ADDRINT ip, REG flags, REG esp) {
     print_ins(ip, flags);
     print_taint_array(did_taint);
     did_taint = false;
-    //print_tainted_addresses();
+    printESP(esp);
+    print_tainted_addresses();
     RegValuesFile << endl;
 }
 
@@ -234,21 +239,20 @@ VOID taintAnalysis(ADDRINT ip, INS ins, REG flags) {
 // POP analysis
 // We look for the taint of the stack pointer address and assign it to the taint of the register
 VOID popAnalysis(ADDRINT ip, ADDRINT sp) {
-    cout << "POP " << sp << endl;
-    bool taint = TMS.find(sp) != TMS.end();
+    bool taint = TMS.find(readAddr) != TMS.end();
     
     REG write_reg = writeRegMap[ip];
     taint_array[write_reg] = taint;
 }
 
 
-VOID printState(ADDRINT ip, REG flags) {
+VOID printState(ADDRINT ip, REG flags, REG esp) {
     // cleanup code after everything
     // removes the 0th taint array element, which is the invalid register
     taint_array[0] = 0;
 
     // and print
-    print_all(ip, flags);
+    print_all(ip, flags, esp);
 }
 
 VOID saveReadAddr(ADDRINT addr) {
@@ -441,55 +445,37 @@ VOID Instruction(INS ins, VOID *v){
         else { 
             // NOTE: REG baseR=INS_OperandMemoryBaseReg(ins,1);
             // check if should be 1 or 0
+            
 
-            // POP instruction
-            // FIXME this might not be needed as the taintAnalysis below should take care of it
-            if (INS_Opcode(ins) == 580) {
-                INS_InsertCall(ins, IPOINT_AFTER,
-                        (AFUNPTR) popAnalysis,
-                        IARG_INST_PTR,
-                        IARG_REG_VALUE, REG_ESP,
-                        IARG_END);	
+            // get the write register, get the original from it, and check if it is general purpose
+            REG write_to = INS_RegW(ins, 0);
+            write_to = REG_FullRegName(write_to); // (EAX, AX, AH, AL) -> RAX
+            regNameMap[write_to] = REG_StringShort(write_to);
+            if (REG_is_gr(write_to))
+                writeRegMap[addr] = write_to;
+
+            // filling read registers
+            std::list<REG> readList;
+            std::list<REG>::iterator it;
+            it = readList.begin();
+
+            // FIXME disregard base and index register
+            const UINT32 max_r = INS_MaxNumRRegs(ins); 
+            for (unsigned int i=0; i<max_r; i++) {
+                REG read = REG_FullRegName(INS_RegR(ins, i));
+                if (REG_is_gr(read)) // just the general purpose registers
+                    readRegMap[addr].insert(it, read);
             }
-            else {
 
-                // FIXME starting integration here
+            readRegMap[addr] = readList;
 
-                //ADDRINT addr         = INS_Address(ins);
-                //disAssemblyMap[addr] = INS_Disassemble(ins);
-                //categoryMap[addr]    = CATEGORY_StringShort(INS_Category(ins));
-                //mnemonicMap[addr]    = INS_Mnemonic(ins);
-                
-                // get the write register, get the original from it, and check if it is general purpose
-                REG write_to = INS_RegW(ins, 0);
-                write_to = REG_FullRegName(write_to); // (EAX, AX, AH, AL) -> RAX
-                regNameMap[write_to] = REG_StringShort(write_to);
-                if (REG_is_gr(write_to))
-                    writeRegMap[addr] = write_to;
-
-                // filling read registers
-                std::list<REG> readList;
-                std::list<REG>::iterator it;
-                it = readList.begin();
-
-                // FIXME disregard base and index register
-                const UINT32 max_r = INS_MaxNumRRegs(ins); 
-                for (unsigned int i=0; i<max_r; i++) {
-                    REG read = REG_FullRegName(INS_RegR(ins, i));
-                    if (REG_is_gr(read)) // just the general purpose registers
-                        readRegMap[addr].insert(it, read);
-                }
-
-                readRegMap[addr] = readList;
-
-                INS_InsertCall(ins, IPOINT_AFTER, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
-                    (AFUNPTR) taintAnalysis,
-                    IARG_INST_PTR,
-                    IARG_UINT32, ins,
-                    IARG_REG_VALUE, FLAGS_REG_INDEX,
-                    //IARG_MEMORYREAD_EA,
-                    IARG_END);
-            }
+            INS_InsertCall(ins, IPOINT_AFTER, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
+                (AFUNPTR) taintAnalysis,
+                IARG_INST_PTR,
+                IARG_UINT32, ins,
+                IARG_REG_VALUE, FLAGS_REG_INDEX,
+                //IARG_MEMORYREAD_EA,
+                IARG_END);
         }
 
         if (INS_HasFallThrough(ins))
@@ -497,6 +483,7 @@ VOID Instruction(INS ins, VOID *v){
                 (AFUNPTR) printState,
                 IARG_INST_PTR,
                 IARG_REG_VALUE, FLAGS_REG_INDEX,
+                IARG_REG_VALUE, REG_ESP,
                 IARG_END);
     }    
 }
