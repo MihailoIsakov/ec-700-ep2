@@ -302,27 +302,15 @@ VOID Arg1Memcpy(CHAR * name, ADDRINT size, ADDRINT arg1,ADDRINT arg2)
 }
 
 VOID mallocExitOnTaint() {
-    cout << endl;
-    for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
-        switch (taint_array[i]) {
-            case 0: cout << ".   ";
-                    break;
-            case 1: cout << std::setw(4) << regNameMap[(REG)i];
-                    break;
-            case 2: cout << std::setw(4) << regNameMap[(REG)i];
-                    break;
-        }
-    }
-    cout << endl;
     REG rdi = REG_FullRegName(REG_EDI); 
     bool taint = taint_array[rdi];
-    cout << "RDI index: " << rdi << endl;
     if (taint) {
-        cerr << endl << "No one expects the spanish inquisition!" << endl;
+        cerr << endl << "\033[1;31mNo one expects the spanish inquisition!\033[0m" << endl;
+        cerr << "\033[1;36mFORCEFULLY EXITED\033[0m" << endl;
         PIN_ExitProcess(1);
     }
     else
-        cout << endl << "These are not the droids you're looking for. " << endl;
+        cout << "These are not the droids you're looking for. " << endl;
 }
 
 
