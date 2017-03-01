@@ -8,7 +8,7 @@
 #include <map>
 #include <list>
 
-#define TAINT_ARRAY_SIZE 50
+#define TAINT_ARRAY_SIZE 24
 #define FLAGS_REG_INDEX  25
 
 
@@ -17,6 +17,7 @@ ofstream RegValuesFile;
 
 // globals
 bool flag=true;
+bool did_taint=false;
 
 char taint_array[TAINT_ARRAY_SIZE];
 std::set<ADDRINT>                  TMS; //tainted memory set
@@ -27,6 +28,9 @@ std::map<ADDRINT, std::string>     disAssemblyMap;
 std::map<ADDRINT, std::string>     categoryMap;
 std::map<ADDRINT, std::string>     mnemonicMap;
 std::map<REG,     std::string>     regNameMap;
+
+ADDRINT writeAddr, readAddr;
+bool validReadAddr, validWriteAddr;
 
 
 int get_bit(int value, int n) {
@@ -63,15 +67,14 @@ void print_taint_array(bool taint) {
 
     for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
         switch (taint_array[i]) {
-            case 0: RegValuesFile << " . ";
+            case 0: RegValuesFile << ".   ";
                     break;
-            case 1: RegValuesFile << regNameMap[(REG)i];
+            case 1: RegValuesFile << std::setw(4) << regNameMap[(REG)i];
                     break;
-            case 2: RegValuesFile << regNameMap[(REG)i];
+            case 2: RegValuesFile << std::setw(4) << regNameMap[(REG)i];
                     break;
         }
     }
-    RegValuesFile << endl;
 }
 
 void print_ins(ADDRINT ip, REG flags){
@@ -81,6 +84,19 @@ void print_ins(ADDRINT ip, REG flags){
     //print_flags(flags);
 }
 
+void print_tainted_addresses() {
+    RegValuesFile << "Tainted addr: " ;
+    for(std::set<ADDRINT>::iterator it = TMS.begin(); it != TMS.end(); ++it)
+        RegValuesFile << *it << ", ";
+}
+
+void print_all(ADDRINT ip, REG flags) {
+    print_ins(ip, flags);
+    print_taint_array(did_taint);
+    did_taint = false;
+    //print_tainted_addresses();
+    RegValuesFile << endl;
+}
 
 /////////////////////////////////////////////////////////////////////////////////
 // -----------------------------------------ANALYSIS ROUTINE--------------------
@@ -95,16 +111,19 @@ void print_ins(ADDRINT ip, REG flags){
 //        (as in the case of an add with the destination in memory)
 // Since the same location is being used as an input and a destination, there is no way
 // to remove the taint from it, even though the sum result and the register might be clean.
-VOID binaryRWAnalysis(INS ins, ADDRINT addr, ADDRINT EA, ADDRINT flag) {
+VOID binaryRWAnalysis(INS ins, ADDRINT addr, ADDRINT flag) {
     bool second_taint = false;
     // get the register from the map
-    if (secondOperandMap[addr] != REG_INVALID_)
+    if (secondOperandMap[addr] != REG_INVALID_) {
         second_taint = taint_array[secondOperandMap[addr]];
+    }
 
     bool op_taint = can_overflow(addr) && get_bit(flag, 11);
+    did_taint = op_taint;
 
     if (second_taint || op_taint) {
-        TMS.insert(EA);
+        TMS.insert(writeAddr);
+        cout << "SAVING: " << readAddr << endl;
     }
 }
 
@@ -113,44 +132,58 @@ VOID binaryRWAnalysis(INS ins, ADDRINT addr, ADDRINT EA, ADDRINT flag) {
 // The write address is stored in sp
 // We overwrite sp with the taint value of EA
 // example: push qword ptr[rsp+0x58]
-VOID pushRWAnalysis(ADDRINT EA, ADDRINT sp) {
-    bool taint = TMS.find(EA) != TMS.end();
+VOID pushRWAnalysis(ADDRINT sp) {
+    bool taint = TMS.find(readAddr) != TMS.end();
 
-    if (taint) // add to SP to set
-        TMS.insert(sp);
-    else // otherwise remove it if present
-        TMS.erase(sp);
+    if (taint) { // add to SP to set
+        cout << "pushRW SAVING: " << readAddr << endl;
+        TMS.insert(writeAddr);
+    }
+    else { // otherwise remove it if present
+        cout << "pushRW ERASING: " << readAddr << endl;
+        TMS.erase(writeAddr);
+    }       
 }
 
 // MOV writing to memory analysis code
 // example: mov qword ptr [reg+reg*scale+displacement], reg
 // MOV writes the value stored in a register to memory
 // We overwrite the taint of the memory location with the registers taint
-VOID movWAnalysis(ADDRINT addr, ADDRINT EA) { 
+VOID movWAnalysis(ADDRINT ip) { 
     bool taint = false;
 
-    if (secondOperandMap[addr] != REG_INVALID_)
-        taint = taint_array[secondOperandMap[addr]];
+    if (secondOperandMap[ip] != REG_INVALID_) {
+        taint = taint_array[secondOperandMap[ip]];
+    }
 
-    if (taint) // if reg contains an tainted value
-        TMS.insert(EA);
-    else  // if reg is not tainted, remove it.
-        TMS.erase(EA);
+    if (taint) { // if reg contains an tainted value
+        cout << "MOVING TAINT TO: " << writeAddr;
+        TMS.insert(writeAddr);
+    } 
+    else { // if reg is not tainted, remove it.
+        cout << "ERASING: " << readAddr;
+        TMS.erase(writeAddr);
+    }
 }
 
 // register PUSH analysis code
 // example: PUSH eax
 // We overwrite the taint of the memory location with the registers taint
-VOID pushWAnalysis(ADDRINT addr, ADDRINT sp) { 
+VOID pushWAnalysis(ADDRINT ip, ADDRINT sp) { 
     bool taint = false;
 
-    if (secondOperandMap[addr] != REG_INVALID_)
-        taint = taint_array[secondOperandMap[addr]];
+    if (secondOperandMap[ip] != REG_INVALID_) {
+        taint = taint_array[secondOperandMap[ip]];
+    }
 
-    if (taint) // if pushed register is tainted; insert addr into set
+    if (taint) { // if pushed register is tainted; insert addr into set
+        cout << "pushWAnalysis SAVING: " << std::hex << sp << endl;
         TMS.insert(sp);
-    else // If pushed register is not tainted, remove that address from RBT.
+    }
+    else { // If pushed register is not tainted, remove that address from RBT.
+        cout << "ERASING: " << readAddr << endl;
         TMS.erase(sp);
+    }
 }
 
 // Operations writing to a register analysis
@@ -158,8 +191,7 @@ VOID pushWAnalysis(ADDRINT addr, ADDRINT sp) {
 //     1. Taint of register operands
 //     2. Taint of read memory address
 //     3. Whether the instruction has overflowed and it is regarded as overflowable
-VOID taintAnalysis(ADDRINT ip, INS ins, REG flags, ADDRINT mem_addr) { 
-    print_ins(ip, flags);
+VOID taintAnalysis(ADDRINT ip, INS ins, REG flags) { 
 
     // write to this
     REG write_reg = writeRegMap[ip];
@@ -170,7 +202,7 @@ VOID taintAnalysis(ADDRINT ip, INS ins, REG flags, ADDRINT mem_addr) {
         taint = get_bit(flags, 11);
     if (taint) {
         taint_array[write_reg] = 1;
-        print_taint_array(true);
+        did_taint = true;
         return;
     }
 
@@ -189,23 +221,54 @@ VOID taintAnalysis(ADDRINT ip, INS ins, REG flags, ADDRINT mem_addr) {
     }
 
     // check if the memory address is tainted
-    if (TMS.find(mem_addr) != TMS.end())
-        taint = true;
+    if (validReadAddr) { // only if we are actually reading in this instruction
+        cout << readAddr;
+        if (TMS.find(readAddr) != TMS.end())
+            taint = true;
+    }
 
     taint_array[write_reg] = taint ? 2 : 0;
 
-    print_taint_array(false);
 }
 
 // POP analysis
 // We look for the taint of the stack pointer address and assign it to the taint of the register
-VOID popAnalysis(ADDRINT ip, ADDRINT sp){
-    std::set<ADDRINT>::iterator it=TMS.find(sp);
-    bool taint = (it!=TMS.end()) ? 1 : 0;
+VOID popAnalysis(ADDRINT ip, ADDRINT sp) {
+    cout << "POP " << sp << endl;
+    bool taint = TMS.find(sp) != TMS.end();
     
     REG write_reg = writeRegMap[ip];
     taint_array[write_reg] = taint;
 }
+
+
+VOID printState(ADDRINT ip, REG flags) {
+    // cleanup code after everything
+    // removes the 0th taint array element, which is the invalid register
+    taint_array[0] = 0;
+
+    // and print
+    print_all(ip, flags);
+}
+
+VOID saveReadAddr(ADDRINT addr) {
+    readAddr = addr & 0xffffffff;
+    validReadAddr = true;
+}
+
+VOID setReadInvalid() {
+    validReadAddr = false;
+}
+
+VOID saveWriteAddr(ADDRINT addr) {
+    writeAddr = addr & 0xffffffff;
+    validWriteAddr = true;
+}
+
+VOID setWriteInvalid() {
+    validWriteAddr = false;
+}
+
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -216,17 +279,49 @@ VOID Instruction(INS ins, VOID *v){
 
     if(flag){    // open files
         // Mihailo's instrumentation setup
-        RegValuesFile.open("logs/values.out");
+        RegValuesFile.open("/disk/logs/values.out");
         for (int i=0; i<TAINT_ARRAY_SIZE; i++)
             taint_array[i] = 0;
 
         flag=false;
     }
+    
+    /////////////////////////////////////////////
+    // bookeeping 
+    ////////////////////////////////////////////
+    
+    ADDRINT addr         = INS_Address(ins);
+    disAssemblyMap[addr] = INS_Disassemble(ins);
+    categoryMap[addr]    = CATEGORY_StringShort(INS_Category(ins));
+    mnemonicMap[addr]    = INS_Mnemonic(ins);
 
     /////////////////////////////////////////////
     // Memory Instructions
     ////////////////////////////////////////////
 
+    // saving the addresses before using
+    if (INS_IsMemoryRead(ins))
+        INS_InsertCall(ins, IPOINT_BEFORE, 
+            (AFUNPTR) saveReadAddr,
+            IARG_MEMORYREAD_EA,
+            IARG_END);
+    else
+        INS_InsertCall(ins, IPOINT_BEFORE, 
+            (AFUNPTR) setReadInvalid,
+            IARG_END);
+
+    if (INS_IsMemoryWrite(ins))
+        INS_InsertCall(ins, IPOINT_BEFORE, 
+            (AFUNPTR) saveWriteAddr,
+            IARG_MEMORYWRITE_EA,
+            IARG_END);
+    else 
+        INS_InsertCall(ins, IPOINT_BEFORE,
+            (AFUNPTR) setWriteInvalid,
+            IARG_END);
+
+
+    // for allowing IPOINT_AFTER
     if (INS_HasFallThrough(ins)) { // FIXME
 
         if(INS_IsMemoryWrite(ins) && INS_IsMemoryRead(ins)) { //some instructions both read and write to mem.
@@ -268,7 +363,7 @@ VOID Instruction(INS ins, VOID *v){
                         (AFUNPTR) binaryRWAnalysis,
                         IARG_UINT32, ins,
                         IARG_INST_PTR,
-                        IARG_MEMORYREAD_EA,
+                        //IARG_MEMORYREAD_EA,
                         IARG_REG_VALUE, flagreg,
                         IARG_END);	
             }
@@ -279,7 +374,7 @@ VOID Instruction(INS ins, VOID *v){
             else if(INS_Opcode(ins) == 633) { 
                 INS_InsertCall(ins, IPOINT_AFTER,
                         (AFUNPTR) pushRWAnalysis,
-                        IARG_MEMORYREAD_EA,
+                        //IARG_MEMORYREAD_EA,
                         IARG_REG_VALUE, REG_ESP,
                         IARG_END);
             }
@@ -318,14 +413,20 @@ VOID Instruction(INS ins, VOID *v){
                 INS_InsertCall(ins, IPOINT_AFTER,
                         (AFUNPTR) movWAnalysis,
                         IARG_INST_PTR,
-                        IARG_MEMORYWRITE_EA,
+                        //IARG_MEMORYWRITE_EA,
                         IARG_END);	
             }	
 
             // pushing a register
             else if(INS_Opcode(ins) == 633){
+                REG readR = REG_FullRegName(INS_RegR(ins, 0));
+                ADDRINT addr = INS_Address(ins);
+
+                secondOperandMap[addr] = (REG_valid(readR)) ? readR : REG_INVALID_;
+
                 INS_InsertCall(ins,IPOINT_AFTER,
                         (AFUNPTR) pushWAnalysis, // for push funct. if reg tainted add
+                        IARG_INST_PTR,
                         IARG_REG_VALUE, REG_ESP, 
                         IARG_END);	
             }	
@@ -336,6 +437,7 @@ VOID Instruction(INS ins, VOID *v){
         // Result possibly saved to register, operands are registers and memory 
         // The taint can come from the registers or memory, and the operation can overflow introducting taint
         //else if (INS_IsMemoryRead(ins)) { 
+        // FIXME possibly we need two codes, one that assumes we have a memory read and one that does not
         else { 
             // NOTE: REG baseR=INS_OperandMemoryBaseReg(ins,1);
             // check if should be 1 or 0
@@ -353,10 +455,10 @@ VOID Instruction(INS ins, VOID *v){
 
                 // FIXME starting integration here
 
-                ADDRINT addr         = INS_Address(ins);
-                disAssemblyMap[addr] = INS_Disassemble(ins);
-                categoryMap[addr]    = CATEGORY_StringShort(INS_Category(ins));
-                mnemonicMap[addr]    = INS_Mnemonic(ins);
+                //ADDRINT addr         = INS_Address(ins);
+                //disAssemblyMap[addr] = INS_Disassemble(ins);
+                //categoryMap[addr]    = CATEGORY_StringShort(INS_Category(ins));
+                //mnemonicMap[addr]    = INS_Mnemonic(ins);
                 
                 // get the write register, get the original from it, and check if it is general purpose
                 REG write_to = INS_RegW(ins, 0);
@@ -385,10 +487,17 @@ VOID Instruction(INS ins, VOID *v){
                     IARG_INST_PTR,
                     IARG_UINT32, ins,
                     IARG_REG_VALUE, FLAGS_REG_INDEX,
-                    IARG_MEMORYREAD_EA,
+                    //IARG_MEMORYREAD_EA,
                     IARG_END);
             }
         }
+
+        if (INS_HasFallThrough(ins))
+            INS_InsertCall(ins, IPOINT_AFTER, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
+                (AFUNPTR) printState,
+                IARG_INST_PTR,
+                IARG_REG_VALUE, FLAGS_REG_INDEX,
+                IARG_END);
     }    
 }
 
@@ -398,8 +507,9 @@ VOID Instruction(INS ins, VOID *v){
 // This function is called when the application exits
 VOID Fini(INT32 code, VOID *v)
 {
-    for(std::set<ADDRINT>::iterator it=TMS.begin();it!=TMS.end();++it) std::cout<<' '<<*it;
-    std::cout<<"END OF PINTOOL"<<endl;
+    //for(std::set<ADDRINT>::iterator it=TMS.begin();it!=TMS.end(); ++it) 
+        //std::cout<<' '<<*it;
+    //std::cout<<"END OF PINTOOL"<<endl;
 }
 /////////
 
