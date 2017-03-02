@@ -226,7 +226,7 @@ VOID taintAnalysis(ADDRINT ip, INS ins, REG flags) {
     if (can_overflow(ip))
         taint = get_bit(flags, 11);
     if (taint) {
-        taint_array[write_reg] = 1;
+        taint_array[write_reg] = true;
         did_taint = true;
         return;
     }
@@ -240,7 +240,6 @@ VOID taintAnalysis(ADDRINT ip, INS ins, REG flags) {
     std::list<REG>::iterator it;
     for(it = readRegMap[ip].begin(); it != readRegMap[ip].end(); ++it) {
         REG read = *it;
-        // FIXME: better taint policy?
         if (taint_array[read] != 0)
             taint = true;
     }
@@ -251,8 +250,7 @@ VOID taintAnalysis(ADDRINT ip, INS ins, REG flags) {
             taint = true;
     }
 
-    taint_array[write_reg] = taint ? 2 : 0;
-
+    taint_array[write_reg] = taint;
 }
 
 // POP analysis
@@ -302,11 +300,6 @@ VOID setWriteInvalid() {
 //---------------------------------------IMAGE ANALYSYS--------------------------------------
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-
-VOID Arg1Memcpy(CHAR * name, ADDRINT size, ADDRINT arg1,ADDRINT arg2)
-{
-	TraceFile << name << "(" << size << ")" << "(" << arg1 << ")" <<"(" << arg2 << ")" <<endl;
-}
 
 VOID mallocExitOnTaint() {
     REG rdi = REG_FullRegName(REG_EDI); 
