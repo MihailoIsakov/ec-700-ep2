@@ -19,10 +19,12 @@
 #else
 #define MALLOC "malloc"
 #define FREE "free"
-#define MEMCPY "__libc_memalign"
+//#define MEMCPY "__libc_memalign"
+#define MEMCPY ".plt"
 #endif
 
 //#define DEBUG
+#define FANCY_MALLOC
 
 
 // log files
@@ -76,7 +78,7 @@ void print_flags(REG flags) {
 }
 
 void print_taint_array(bool taint) {
-    RegValuesFile << (taint ? "OF " : "   ");
+    RegValuesFile << (taint ? " OF " : "    ");
 
     for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
         switch (taint_array[i]) {
@@ -85,6 +87,19 @@ void print_taint_array(bool taint) {
             case 1: RegValuesFile << std::setw(4) << regNameMap[(REG)i];
                     break;
             case 2: RegValuesFile << std::setw(4) << regNameMap[(REG)i];
+                    break;
+        }
+    }
+}
+
+void print_taint_array_cout() {
+    for (int i=0; i<TAINT_ARRAY_SIZE; i++) {
+        switch (taint_array[i]) {
+            case 0: cout << ".   ";
+                    break;
+            case 1: cout << std::setw(4) << regNameMap[(REG)i];
+                    break;
+            case 2: cout << std::setw(4) << regNameMap[(REG)i];
                     break;
         }
     }
@@ -259,6 +274,12 @@ VOID printState(ADDRINT ip, REG flags, REG esp) {
     print_all(ip, flags, esp);
 }
 
+VOID printCall(ADDRINT ip, REG flags, REG esp) {
+    // and print
+    //if (categoryMap[ip] == "SYSCALL" || categoryMap[ip] == "CALL")
+    print_all(ip, flags, esp);
+}
+
 VOID saveReadAddr(ADDRINT addr) {
     readAddr = addr & 0xffffffff;
     validReadAddr = true;
@@ -281,20 +302,6 @@ VOID setWriteInvalid() {
 //---------------------------------------IMAGE ANALYSYS--------------------------------------
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-VOID mallocPrintBefore(CHAR * name, ADDRINT size)
-{
-	TraceFile << name << "(" << size << ")" << endl;
-	//	std::cout<<"Arg1MallocBefore"<<endl;
-}
-
-VOID mallocPrintAfter(ADDRINT ret)
-{
-
-	TraceFile << "  returns " << ret << endl;
-
-	//	std::cout<<"MallocAfter"<<endl;
-
-}
 
 VOID Arg1Memcpy(CHAR * name, ADDRINT size, ADDRINT arg1,ADDRINT arg2)
 {
@@ -305,12 +312,31 @@ VOID mallocExitOnTaint() {
     REG rdi = REG_FullRegName(REG_EDI); 
     bool taint = taint_array[rdi];
     if (taint) {
+#ifdef FANCY_MALLOC
         cerr << endl << "\033[1;31mNo one expects the spanish inquisition!\033[0m" << endl;
-        cerr << "\033[1;36mFORCEFULLY EXITED\033[0m" << endl;
+        cerr << "\033[1;36mFORCEFULLY EXITED ON MALLOC\033[0m" << endl;
+#endif
+        PIN_ExitProcess(1);
+    }
+#ifdef FANCY_MALLOC
+    else
+        cout << "These are not the droids you're looking for. " << endl;
+#endif
+}
+
+VOID memcpyExitOnTaint(ADDRINT ip, RTN rtn) {
+    //cout << "NAME: " << name << endl;;
+    REG rdx = REG_FullRegName(REG_EDX); 
+    bool taint = taint_array[rdx];
+    //print_taint_array_cout();
+    cout << "MEMCPY ip: " << std::hex << ip << ", taint: " << taint << endl;
+    if (taint) {
+        cerr << endl << "\033[1;31mNo one expects the spanish inquisition!\033[0m" << endl;
+        cerr << "\033[1;36mFORCEFULLY EXITED ON MEMCPY\033[0m" << endl;
         PIN_ExitProcess(1);
     }
     else
-        cout << "These are not the droids you're looking for. " << endl;
+        cout << "That's no moon. " << endl;
 }
 
 
@@ -329,6 +355,20 @@ VOID Instruction(INS ins, VOID *v){
     disAssemblyMap[addr] = INS_Disassemble(ins);
     categoryMap[addr]    = CATEGORY_StringShort(INS_Category(ins));
     mnemonicMap[addr]    = INS_Mnemonic(ins);
+
+    //INS_InsertCall(ins, IPOINT_BEFORE, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
+        //(AFUNPTR) printCall,
+        //IARG_INST_PTR,
+        //IARG_REG_VALUE, FLAGS_REG_INDEX,
+        //IARG_REG_VALUE, REG_ESP,
+        //IARG_END);
+
+    //INS_InsertCall(ins, IPOINT_BEFORE, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
+        //(AFUNPTR) printState,
+        //IARG_INST_PTR,
+        //IARG_REG_VALUE, FLAGS_REG_INDEX,
+        //IARG_REG_VALUE, REG_ESP,
+        //IARG_END);
 
     /////////////////////////////////////////////
     // Memory Instructions
@@ -514,13 +554,12 @@ VOID Instruction(INS ins, VOID *v){
                 IARG_END);
         }
 
-        if (INS_HasFallThrough(ins))
-            INS_InsertCall(ins, IPOINT_AFTER, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
-                (AFUNPTR) printState,
-                IARG_INST_PTR,
-                IARG_REG_VALUE, FLAGS_REG_INDEX,
-                IARG_REG_VALUE, REG_ESP,
-                IARG_END);
+        INS_InsertCall(ins, IPOINT_AFTER, //this might be IPOINT_AFTER, we might need to check FLAGS after ins execution done 
+            (AFUNPTR) printState,
+            IARG_INST_PTR,
+            IARG_REG_VALUE, FLAGS_REG_INDEX,
+            IARG_REG_VALUE, REG_ESP,
+            IARG_END);
     }    
 }
 
@@ -545,18 +584,6 @@ VOID Image(IMG img, VOID *v)
         RTN_InsertCall(mallocRtn,
                 IPOINT_BEFORE, (AFUNPTR) mallocExitOnTaint, IARG_END);
 
-		//RTN_InsertCall(mallocRtn, 
-                //IPOINT_BEFORE, (AFUNPTR) mallocPrintBefore,
-				//IARG_ADDRINT, MALLOC,
-				//IARG_FUNCARG_ENTRYPOINT_VALUE, 0,
-				//IARG_END);
-
-		//RTN_InsertCall(mallocRtn, 
-                //IPOINT_AFTER, (AFUNPTR) mallocPrintAfter,
-				//IARG_FUNCRET_EXITPOINT_VALUE, 
-                //IARG_END);
-
-
 		RTN_Close(mallocRtn);
 	}
 
@@ -574,21 +601,18 @@ VOID Image(IMG img, VOID *v)
 	//}
 
 	//// Find the memcpy() function
-	//RTN memcpyRtn=RTN_FindByName(img,MEMCPY);
-	//if(RTN_Valid(memcpyRtn)){
+    RTN memcpyRtn=RTN_FindByName(img,MEMCPY);
+    if(RTN_Valid(memcpyRtn)){
+        RTN_Open(memcpyRtn);
+        RTN_InsertCall(memcpyRtn,
+                IPOINT_BEFORE, 
+                (AFUNPTR) memcpyExitOnTaint, 
+                IARG_INST_PTR,
+                IARG_UINT32, memcpyRtn,
+                IARG_END);
 
-		//RTN_Open(memcpyRtn);
-		//RTN_InsertCall(memcpyRtn, IPOINT_BEFORE, (AFUNPTR)Arg1Memcpy,
-				//IARG_ADDRINT, MEMCPY,
-				//IARG_FUNCARG_ENTRYPOINT_VALUE, 0,	IARG_FUNCARG_ENTRYPOINT_VALUE, 1,
-
-
-				//IARG_FUNCARG_ENTRYPOINT_VALUE, 2,
-				//IARG_END);
-		//RTN_Close(memcpyRtn);
-	//}
-
-
+        RTN_Close(memcpyRtn);
+    }
 }
 
 //////// Finish fun ////////////
@@ -617,8 +641,6 @@ int main(int argc, char * argv[]){
     TraceFile.setf(ios::app | ios::out);
     TraceFile.open("/disk/logs/malloc_log.out");
 
-
-
 	// Initialize pin
 	PIN_InitSymbols();
 
@@ -634,11 +656,6 @@ int main(int argc, char * argv[]){
 
     // Start the program, never returns
     PIN_StartProgram();
-
-    return 0;
-
-
-
 
     return 0;
 }
