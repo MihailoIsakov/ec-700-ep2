@@ -32,65 +32,52 @@ END_LEGAL */
 #include "pin.H"
 #include <iostream>
 #include <fstream>
+
 using namespace std;
 
+#define MEMORY_DUMP_SIZE 100000
 #define TARGET_FUN "_ZNKSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE7compareERKS4_"
 
-char *url = "asdfqwertyuip                                                                                                                                                      ";
-
-/*
- * Analysis routines
- */
     
-VOID printFuncMem(REG edx) {
-    //cout << "edx: " << edx << endl;
-    char *text = (char*) malloc(sizeof(char) * 100);
-    PIN_SafeCopy(text, (void *) edx, 100);
-    cout << "edx: " << std::hex << edx << "; text: " <<  text << ";" << endl;
+/*
+ * Analysis function. Using PIN_SafeCopy, which attempts to copy memory from address to address and safely stops if we
+ * don't have access, dumps MEMORY_DUMP_SIZE bytes into standard output, which hopefully contain the URLs we need.
+ */
+VOID printFuncMem() {
+
+    char text[MEMORY_DUMP_SIZE];
+    PIN_SafeCopy(text, (void *) 0x400000, MEMORY_DUMP_SIZE);
+
+    // For some reason, printing codes lower than 20 screws up the output, so replace them with '?'
+    for (int i=0; i<MEMORY_DUMP_SIZE; i++)
+        if (text[i] < 0x20)
+            text[i] = '?';
+
+    printf("%s\n", text);
 }
 
 /*
- * Instrumentation routines
+ * Instrumentation routine, searches the function with name in TARGET_FUN, and assuming that the program has already 
+ * decrypted the URLs which are somewhere in memory, dumps MEMORY_DUMP_SIZE bytes into standard output.
  */
 VOID Image(IMG img, VOID *v) {
-
-
-    UINT32 count = 0;
-    
     for (SEC sec = IMG_SecHead(img); SEC_Valid(sec); sec = SEC_Next(sec))
-    { 
         for (RTN rtn = SEC_RtnHead(sec); RTN_Valid(rtn); rtn = RTN_Next(rtn))
         {
-            // Prepare for processing of RTN, an  RTN is not broken up into BBLs,
-            // it is merely a sequence of INSs 
             RTN_Open(rtn);
             
-            for (INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins))
-            {
-                count++;
-            }
-
+            // if the function name is TARGET_FUN, dump memory
             if (RTN_Name(rtn).compare(TARGET_FUN) == 0)
-                if (RTN_Valid(rtn)) {
-                    RTN_InsertCall(rtn, 
-                            IPOINT_BEFORE, (AFUNPTR) printFuncMem, 
-                            IARG_REG_VALUE, REG_RDX, 
-                            IARG_END);
-                    //cout << "ayy caramba" << endl;
-                }
+                if (RTN_Valid(rtn))
+                    RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR) printFuncMem, IARG_END);
 
             // to preserve space, release data associated with RTN after we have processed it
             RTN_Close(rtn);
         }
-    }
-    fprintf(stderr, "Image %s has  %d instructions\n", IMG_Name(img).c_str(), count);
+   
 }
 
-VOID Fini(INT32 code, VOID *v)
-{
-    cout << url << endl;
-
-}
+VOID Fini(INT32 code, VOID *v) {}
 
 /* ===================================================================== */
 /* Print Help Message                                                    */
@@ -98,8 +85,6 @@ VOID Fini(INT32 code, VOID *v)
 
 INT32 Usage()
 {
-    //cerr << "This is the invocation pintool" << endl;
-    //cerr << endl << KNOB_BASE::StringKnobSummary() << endl;
     return -1;
 }
 
@@ -117,10 +102,6 @@ int main(int argc, char * argv[])
     IMG_AddInstrumentFunction(Image, 0);
     PIN_AddFiniFunction(Fini, 0);
 
-    // Write to a file since cout and cerr maybe closed by the application
-    //OutFile.open(KnobOutputFile.Value().c_str());
-    //OutFile.setf(ios::showbase);
-    
     // Start the program, never returns
     PIN_StartProgram();
     
