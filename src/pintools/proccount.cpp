@@ -57,17 +57,16 @@ typedef struct RtnCount
 RTN_COUNT * RtnList = 0;
 
 // This function is called before every instruction is executed
-VOID docount(UINT64 * counter,string * name)
+VOID docount(UINT64 * counter)
 {
     (*counter)++;
-    std::cout<< &name<<"--"<<(*counter)<<endl;
 }
     
 const char * StripPath(const char * path)
 {
     const char * file = strrchr(path,'/');
     if (file)
-       return file+1;
+        return file+1;
     else
         return path;
 }
@@ -92,9 +91,9 @@ VOID Routine(RTN rtn, VOID *v)
     RtnList = rc;
             
     RTN_Open(rtn);
-//std::cout << rc->_name<<endl;            
+            
     // Insert a call at the entry point of a routine to increment the call count
-    RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)docount, IARG_PTR, &(rc->_rtnCount),IARG_PTR, &(rc->_name), IARG_END);
+    RTN_InsertCall(rtn, IPOINT_BEFORE, (AFUNPTR)docount, IARG_PTR, &(rc->_rtnCount), IARG_END);
     
     // For each instruction of the routine
     for (INS ins = RTN_InsHead(rtn); INS_Valid(ins); ins = INS_Next(ins))
