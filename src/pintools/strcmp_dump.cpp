@@ -52,7 +52,7 @@ VOID printFuncMem() {
     // We pick the '\' since it is not a valid URL character, so it will ease the regex hunting
     for (int i=0; i<MEMORY_DUMP_SIZE; i++)
         if (text[i] < 0x20)
-            text[i] = '\';
+            text[i] = '\\';
 
     printf("%s\n", text);
 }
