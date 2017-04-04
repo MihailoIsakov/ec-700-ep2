@@ -48,10 +48,11 @@ VOID printFuncMem() {
     char text[MEMORY_DUMP_SIZE];
     PIN_SafeCopy(text, (void *) 0x400000, MEMORY_DUMP_SIZE);
 
-    // For some reason, printing codes lower than 20 screws up the output, so replace them with '?'
+    // For some reason, printing codes lower than 20 screws up the output, so replace them with '\'
+    // We pick the '\' since it is not a valid URL character, so it will ease the regex hunting
     for (int i=0; i<MEMORY_DUMP_SIZE; i++)
         if (text[i] < 0x20)
-            text[i] = '?';
+            text[i] = '\';
 
     printf("%s\n", text);
 }
